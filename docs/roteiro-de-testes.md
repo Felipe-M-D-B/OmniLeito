@@ -13,7 +13,7 @@ O arquivo `docs/como-testar-localmente-monolito.md` descreve o monolito antigo. 
 | MySQL do OmniLeito | 3310 | Schemas `omnileito_identidade`, `omnileito_ocorrencias`, `omnileito_frota`, `omnileito_leitos` |
 | RabbitMQ | 5672 e 15672 | Filas da saga e da notificação. Painel: `http://localhost:15672`, `guest` / `guest` |
 | Redis | 6379 | Cache de ambulâncias e de leitos |
-| MongoDB | 27017 | Banco `omnileito_notificacoes` |
+| MongoDB | 27018 | Banco `omnileito_notificacoes` |
 | api-gateway | 8085 | Única porta das chamadas abaixo |
 | ms-identidade | 8092 | Login |
 | ms-ocorrencias | 8093 | Abertura, despacho e estado da saga |
@@ -40,24 +40,11 @@ Cada especialidade tem um único leito `LIVRE`. Os cenários usam isso de propó
 Subir a infraestrutura, se ainda não estiver:
 
 ```bash
-docker run -d --name omnileito-mysql \
-  -e MYSQL_ROOT_PASSWORD=root123 \
-  -e MYSQL_DATABASE=omnileito \
-  -p 3310:3306 \
-  mysql:8.4
-
-docker run -d --name omnileito-rabbitmq \
-  -p 5672:5672 -p 15672:15672 \
-  rabbitmq:3-management
-
-docker run -d --name omnileito-redis \
-  -p 6379:6379 \
-  redis:7-alpine
-
-docker run -d --name omnileito-mongo \
-  -p 27017:27017 \
-  mongo:7
+docker compose up -d
+docker compose ps
 ```
+
+Os dados ficam em volumes nomeados. `docker compose down` remove os containers e preserva os dados; `docker compose down -v` também remove os volumes e reinicia os bancos do zero.
 
 Na pasta do projeto, um terminal por serviço:
 

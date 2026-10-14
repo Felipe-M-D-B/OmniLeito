@@ -49,37 +49,30 @@ O JSON da aplicação usa Jackson 3 (`tools.jackson`). O conversor das mensagens
 | 3310 | MySQL do OmniLeito. Dentro do container o servidor escuta 3306; no host a porta publicada é 3310 |
 | 5672 e 15672 | RabbitMQ. Painel em `http://localhost:15672`, `guest` / `guest` |
 | 6379 | Redis |
-| 27017 | MongoDB |
+| 27018 | MongoDB no host (o container usa 27017) |
 | 8085 | Gateway |
 | 8092 a 8096 | Os cinco serviços |
 
 ## Subir a infraestrutura
 
+A infraestrutura de desenvolvimento é definida em [`compose.yaml`](./compose.yaml). Na pasta do projeto, suba todos os serviços com:
+
 ```bash
-docker run -d --name omnileito-mysql \
-  -e MYSQL_ROOT_PASSWORD=root123 \
-  -e MYSQL_DATABASE=omnileito \
-  -p 3310:3306 \
-  mysql:8.4
-
-docker run -d --name omnileito-rabbitmq \
-  -p 5672:5672 -p 15672:15672 \
-  rabbitmq:3-management
-
-docker run -d --name omnileito-redis \
-  -p 6379:6379 \
-  redis:7-alpine
-
-docker run -d --name omnileito-mongo \
-  -p 27017:27017 \
-  mongo:7
+docker compose up -d
+docker compose ps
 ```
 
-Usuário e senha do MySQL: `root` / `root123`. Cada serviço cria o próprio schema com `createDatabaseIfNotExist=true` e o Flyway aplica a migração na primeira subida.
+O Compose cria volumes nomeados (`mysql-data`, `rabbitmq-data`, `redis-data` e `mongo-data`), portanto `docker compose down` para e remove os containers sem apagar os dados. Para remover também os dados persistidos, use `docker compose down -v`.
 
-Se o container já existe, `docker start omnileito-mysql omnileito-rabbitmq omnileito-redis omnileito-mongo` basta. Conferir com `docker ps --filter name=omnileito-`.
+Usuário e senha de desenvolvimento do MySQL: `root` / `root123`. O RabbitMQ usa `guest` / `guest`. Cada serviço cria o próprio schema com `createDatabaseIfNotExist=true` e o Flyway aplica a migração na primeira subida. Essas credenciais são apenas para desenvolvimento local.
 
-Frota e leitos sobem com o Redis fechado: a consulta cai no MySQL. O MS-Notificacoes não sobe sem o Mongo na 27017.
+Para parar a infraestrutura sem remover os volumes:
+
+```bash
+docker compose down
+```
+
+Frota e leitos sobem com o Redis fechado: a consulta cai no MySQL. O MS-Notificacoes usa o Mongo publicado na porta `27018` do host; dentro do container, o MongoDB continua ouvindo na porta `27017`.
 
 Variáveis, todas com padrão para esta máquina:
 
@@ -91,7 +84,7 @@ Variáveis, todas com padrão para esta máquina:
 | `OMNILEITO_RABBIT_HOST` / `OMNILEITO_RABBIT_PORT` | `localhost` / `5672` |
 | `OMNILEITO_RABBIT_USER` / `OMNILEITO_RABBIT_PASSWORD` | `guest` / `guest` |
 | `OMNILEITO_REDIS_HOST` / `OMNILEITO_REDIS_PORT` | `localhost` / `6379` |
-| `OMNILEITO_MONGO_URI` | `mongodb://localhost:27017/omnileito_notificacoes` |
+| `OMNILEITO_MONGO_URI` | `mongodb://localhost:27018/omnileito_notificacoes` |
 | `OMNILEITO_JWT_SEGREDO` | `omnileito-demo-segredo-32-bytes!!` |
 
 O mesmo segredo precisa valer no gateway e nos serviços. O padrão já é o mesmo em todos.

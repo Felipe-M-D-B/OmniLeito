@@ -1,6 +1,8 @@
-# Como testar localmente o que já está pronto
+# Como testar localmente o monólito legado
 
-Leitura de 13/10/2026. Vale para a Saga que está em `develop`. Não sobe cache, gateway nem job.
+> Este roteiro é específico para o monólito antigo e não representa o procedimento recomendado para a arquitetura atual baseada em microsserviços e Docker Compose. Para o sistema atual, use [`docs/roteiro-de-testes.md`](./roteiro-de-testes.md).
+
+Leitura de 13/10/2026. Vale para a Saga monolítica que estava em `develop`. Não sobe cache, gateway nem job.
 
 O README daquele monolito pede MySQL em `localhost:3306` e a aplicação na porta `8084`. O teste abaixo usou MySQL na porta 3310 e a aplicação na porta 8085.
 
