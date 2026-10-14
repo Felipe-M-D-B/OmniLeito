@@ -110,9 +110,9 @@ O que está em `develop` serve de semente. Permanece no formato de um aplicativo
 | Redis, MongoDB, Resilience4j `2.2.0`, Actuator | só no `pom.xml` do monolito | Redis em Frota e Leitos; Mongo em Notificacoes; Resilience4j no caller do MS-Leitos |
 | Spring Cloud Gateway | ausente | projeto do gateway, Igor |
 | Teste automatizado | `OmniLeitoApplicationTests` só sobe o contexto | JUnit 5 de alocação exclusiva, idempotência e compensação, ainda por escrever |
-| `application.properties` | porta `8084`, MySQL em `localhost:3306` | cada processo com a própria porta. Nesta máquina, nunca a 3306 |
+| `application.properties` | porta `8084`, MySQL em `localhost:3306` | cada processo com a própria porta |
 
-Nesta máquina a porta 3306 é o banco do Ameppre. O teste do monolito usou MySQL exclusivo na porta 3310 e a aplicação na porta 8085. O passo a passo está em `docs/como-testar-localmente.md`.
+O teste do monolito usou MySQL na porta 3310 e a aplicação na porta 8085. O passo a passo está em `docs/como-testar-localmente-monolito.md`.
 
 Histórico que formou o `develop`: configuração inicial, reestruturação, enums, RabbitMQ, primeira alocação de ambulância, `StatusSaga`, README e merge do PR #1 (`felipe-parte2`). A `main` parou em `c42593c` (correção de nomenclatura) e está atrás do `develop`.
 
@@ -308,7 +308,7 @@ O X não foi escolhido. Para a demonstração, o valor fica em propriedade do MS
 
 1. Combinar com o Felipe o esqueleto do MS-Frota e do MS-Leitos antes de colocar cache dentro deles. Cache no monolito seria descartado na separação.
 2. Schema do MS-Leitos com instante da reserva, ocorrência dona e indicador de confirmação da unidade. Sem o instante, o job não tem critério. Isso é migração do banco de leitos, não um `V2` no banco único do monolito.
-3. Redis em container `omnileito-redis`, porta 6379 (livre nesta máquina). Um uso lógico para frota e outro para leitos, ou dois bancos lógicos no mesmo Redis, desde que a invalidação de um não apague o outro.
+3. Redis em container `omnileito-redis`, porta 6379. Um uso lógico para frota e outro para leitos, ou dois bancos lógicos no mesmo Redis, desde que a invalidação de um não apague o outro.
 4. `listarDisponiveis` no MS-Frota e `listarDisponiveis(especialidade)` no MS-Leitos, cache-aside.
 5. Invalidação depois dos comandos do Felipe, já nos processos de frota e leitos.
 6. Endpoints no Swagger desses dois serviços, roteados pelo gateway: consultar ocupação e registrar a atualização de confirmação.
@@ -383,7 +383,7 @@ Parte 3 na branch `leandro-parte3`, a partir de `develop`, quando a implementaç
 
 `docs/` e `.cursor/` continuam fora do Git. O `.gitignore` desta máquina já tem essas duas entradas e ainda não foi commitado.
 
-Nesta máquina cada processo usa porta livre. Não usar 3306 (Ameppre), 3307 (Coneximob), 80, 443 nem 8080. O MySQL da porta 3310 pode abrigar um schema por serviço (`omnileito_identidade`, `omnileito_ocorrencias`, `omnileito_frota`, `omnileito_leitos`). Mongo e Redis em containers `omnileito-*`. Nada disso entra no `application.properties` como porta fixa do Ameppre.
+Cada processo usa a própria porta. O MySQL da porta 3310 abriga um schema por serviço (`omnileito_identidade`, `omnileito_ocorrencias`, `omnileito_frota`, `omnileito_leitos`). Mongo e Redis ficam em containers `omnileito-*`.
 
 ### 8.9 Ordem de construção
 
@@ -398,13 +398,11 @@ O cache não começa no monolito. O esqueleto do MS-Frota e do MS-Leitos vem ant
 
 ---
 
-## 9. Ambiente desta máquina
+## 9. Infraestrutura do OmniLeito
 
-Preservar containers `coneximob-*` (portas 8080 e 3307) e `ameppre-*` (portas 80, 443 e 3306). Podem ser encerrados: `unesp-as-mysql` (3308) e `unesp-as-phpmyadmin` (8088).
+Infra usada no teste do monolito: `omnileito-mysql` na porta 3310, `omnileito-rabbitmq` nas portas 5672 e 15672, aplicação na porta 8085. Cliente MySQL: host `127.0.0.1`, porta `3310`, database `omnileito`, usuário `root`, senha `root123`.
 
-Infra já usada no teste do monolito: `omnileito-mysql` na porta 3310, `omnileito-rabbitmq` nas portas 5672 e 15672, aplicação na porta 8085. DBeaver: host `127.0.0.1`, porta `3310`, database `omnileito`, usuário `root`, senha `root123`.
-
-Quando a separação for autorizada, o mesmo MySQL da 3310 ganha um schema por serviço. Redis em `omnileito-redis` na porta 6379. Mongo em container `omnileito-mongo`, em porta livre. O gateway ocupa outra porta livre, diferente de 8080 e de 8085 enquanto o monolito ainda estiver no ar para comparação.
+Quando a separação for autorizada, o mesmo MySQL da 3310 ganha um schema por serviço. Redis em `omnileito-redis` na porta 6379. Mongo em container `omnileito-mongo`. O gateway ocupa a porta 8085.
 
 ---
 

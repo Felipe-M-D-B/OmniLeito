@@ -1,160 +1,374 @@
-# 🏥 OmniLeito - Sistema de Gerenciamento de Leitos e Despacho Hospitalar
+# OmniLeito
 
-O **OmniLeito** é uma solução **Spring Boot** com **Java 21** para a orquestração do despacho de ambulâncias e reserva de leitos hospitalares utilizando o padrão **Saga (Orquestrado)**, mensageria assíncrona com **RabbitMQ** e persistência relacional via **MySQL** com controle de migrações gerenciado pelo **Flyway**.
+Plataforma de despacho de ocorrências e reserva de leitos para um consórcio municipal de urgência. O recorte é a saga entre regulador, frota e hospital: achar uma ambulância, reservar um leito da especialidade pedida e manter ocorrência, ambulância e leito coerentes quando a unidade aceita, recusa ou fica em silêncio.
 
----
+Cada módulo é um processo Spring Boot. O regulador fala só com o gateway, na porta **8085**. Os serviços não se chamam por HTTP no meio da saga: depois do commit, publicam mensagem no RabbitMQ.
 
-## 🚀 Pré-requisitos
+Disciplina Arquitetura de Software: Teoria e Prática 2026, grupo 3 (Felipe Melchior de Britto, Igor Benedito Costa Gonçalves, Sérgio Leandro Alves da Silva).
 
-* **Java 21 (JDK)**
-* **Maven 3.8+**
-* **MySQL Server** (rodando localmente na porta `3306`)
-* **Docker Engine / Docker Desktop** (para subir o container do RabbitMQ)
-* **Git**
-* **IDE de sua preferência** (no caso de quem está escrevendo esse README, IntelliJ IDEA. Outras recomendações: VS Code ou Eclipse)
+## O que entra e o que fica de fora
 
----
+Entram autenticação do regulador, abertura da ocorrência, despacho com saga, consulta de ocupação com cache, expiração de reserva não confirmada, hospital simulado e o registro da notificação. A interface de demonstração é o Swagger.
 
-## 🛠️ Configuração da Infraestrutura Local
+Ficam de fora, tratados como mock: mapa, protocolo clínico, relatório gerencial, faturamento, SMS ou push de verdade e geolocalização em tempo real. `EM_TRANSPORTE`, `CONCLUIDA`, `CANCELADA`, `EM_ATENDIMENTO` e `INDISPONIVEL` existem no modelo e este fluxo não os alcança. `OCUPADO` só aparece na carga, como leito sem vaga.
 
-### 1. Criar o Banco de Dados no MySQL
-Abra o terminal do MySQL ou seu cliente de banco (DBeaver, outra recomendação: MySQL Workbench) e crie a base de dados:
+## Módulos
 
-```sql
-CREATE DATABASE omnileito;
-```
+| Módulo | Porta | Banco | Responsabilidade |
+| --- | --- | --- | --- |
+| `api-gateway` | 8085 | — | Única entrada do regulador. Valida o JWT e encaminha. Resilience4j só em `GET /api/leitos/disponiveis` |
+| `ms-identidade` | 8092 | MySQL `omnileito_identidade` | Login e emissão do JWT |
+| `ms-ocorrencias` | 8093 | MySQL `omnileito_ocorrencias` | Abertura, despacho e decisão do próximo passo da saga |
+| `ms-frota` | 8094 | MySQL `omnileito_frota` e Redis | Ambulância disponível, alocação e troca de status |
+| `ms-leitos` | 8095 | MySQL `omnileito_leitos` e Redis | Reserva, sorteio da unidade, prazo e nova busca |
+| `ms-notificacoes` | 8096 | MongoDB `omnileito_notificacoes` | Alerta e trilha de auditoria |
+| `omnileito-comum` | — | — | JWT, erros, filas, mensagens e o publicador. Não sobe sozinho |
 
-> **Obs:** Não é necessário criar tabelas ou popular dados manualmente. Ao iniciar o projeto Java Spring Boot, o **Flyway** executa automaticamente os scripts de migração presentes em `src/main/resources/db/migration/V1__init_schema.sql` para criar o schema e a carga inicial de testes.
+Não há chave estrangeira entre schemas. O id da ocorrência é um UUID gerado pelo MS-Ocorrencias. O id da ambulância e o id do leito são numéricos e locais de cada serviço; a ocorrência só guarda a referência.
 
-### 2. Subir o Container do RabbitMQ via Docker
-Execute o comando abaixo no terminal para subir a imagem oficial do **RabbitMQ** com a interface gráfica de gerenciamento ativa:
+## Stack
+
+- Java 21
+- Spring Boot 4.1.1, Maven multimódulo
+- Spring Cloud Gateway (WebFlux) e Spring Cloud BOM `2025.1.2`
+- Spring Data JPA, Flyway e MySQL 8
+- MongoDB só em notificações e auditoria
+- RabbitMQ, filas duráveis, entrega ao menos uma vez
+- Redis em frota e leitos
+- Resilience4j 2.2.0 no gateway, só na consulta de leitos
+- springdoc 2.8.13
+- JWT HMAC-SHA256 próprio (`JwtServico`). Senha com BCrypt
+- JUnit 5 e Mockito
+
+O JSON da aplicação usa Jackson 3 (`tools.jackson`). O conversor das mensagens é `JacksonJsonMessageConverter`.
+
+## Portas
+
+| Porta | Uso |
+| --- | --- |
+| 3310 | MySQL do OmniLeito. Dentro do container o servidor escuta 3306; no host a porta publicada é 3310 |
+| 5672 e 15672 | RabbitMQ. Painel em `http://localhost:15672`, `guest` / `guest` |
+| 6379 | Redis |
+| 27017 | MongoDB |
+| 8085 | Gateway |
+| 8092 a 8096 | Os cinco serviços |
+
+## Subir a infraestrutura
 
 ```bash
-docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+docker run -d --name omnileito-mysql \
+  -e MYSQL_ROOT_PASSWORD=root123 \
+  -e MYSQL_DATABASE=omnileito \
+  -p 3310:3306 \
+  mysql:8.4
+
+docker run -d --name omnileito-rabbitmq \
+  -p 5672:5672 -p 15672:15672 \
+  rabbitmq:3-management
+
+docker run -d --name omnileito-redis \
+  -p 6379:6379 \
+  redis:7-alpine
+
+docker run -d --name omnileito-mongo \
+  -p 27017:27017 \
+  mongo:7
 ```
-> **Obs:** O RabbitMQ é executado diretamenta na máquina, assim como o MySQL, por exemplo. Portanto, deve ser configurado externamente ao projeto Java SpringBoot.
-> 
-> A configuração é fácil podendo ser feita nativamente direto em seu sistema ou através do **DOCKER**. Esta última possibilidade é a minha sugestão.
 
+Usuário e senha do MySQL: `root` / `root123`. Cada serviço cria o próprio schema com `createDatabaseIfNotExist=true` e o Flyway aplica a migração na primeira subida.
 
-* **Porta AMQP (Spring Boot):** `5672`
-* **Painel Web de Gerenciamento:** `http://localhost:15672`
-* **Credenciais Padrão:** Usuário `guest` / Senha `guest`
+Se o container já existe, `docker start omnileito-mysql omnileito-rabbitmq omnileito-redis omnileito-mongo` basta. Conferir com `docker ps --filter name=omnileito-`.
 
----
+Frota e leitos sobem com o Redis fechado: a consulta cai no MySQL. O MS-Notificacoes não sobe sem o Mongo na 27017.
 
-## 💻 Como Clonar e Executar o Projeto
+Variáveis, todas com padrão para esta máquina:
 
-### 1. Clonar o Repositório
+| Variável | Padrão |
+| --- | --- |
+| `OMNILEITO_MYSQL_PORT` | `3310` |
+| `OMNILEITO_MYSQL_USER` | `root` |
+| `OMNILEITO_MYSQL_PASSWORD` | `root123` |
+| `OMNILEITO_RABBIT_HOST` / `OMNILEITO_RABBIT_PORT` | `localhost` / `5672` |
+| `OMNILEITO_RABBIT_USER` / `OMNILEITO_RABBIT_PASSWORD` | `guest` / `guest` |
+| `OMNILEITO_REDIS_HOST` / `OMNILEITO_REDIS_PORT` | `localhost` / `6379` |
+| `OMNILEITO_MONGO_URI` | `mongodb://localhost:27017/omnileito_notificacoes` |
+| `OMNILEITO_JWT_SEGREDO` | `omnileito-demo-segredo-32-bytes!!` |
+
+O mesmo segredo precisa valer no gateway e nos serviços. O padrão já é o mesmo em todos.
+
+## Subir os processos
+
+Na pasta do projeto, uma vez, para publicar o `omnileito-comum` no repositório local:
+
 ```bash
-git clone [https://github.com/SEU-USUARIO/OmniLeito.git](https://github.com/SEU-USUARIO/OmniLeito.git)
-cd OmniLeito
+./mvnw -DskipTests install
 ```
 
-### 2. Verificar o Arquivo **application.properties**
-Confira se o arquivo src/main/resources/application.properties está alinhado com as credenciais do seu MySQL local:
+Cada comando abaixo ocupa o terminal até o processo ser encerrado. São seis processos ao mesmo tempo, então são seis terminais, todos abertos na pasta do projeto. Colar a lista inteira num único terminal só sobe o primeiro: o `spring-boot:run` não devolve o prompt.
 
-```properties
-spring.application.name=OmniLeito
+O `-pl` limita o Maven àquele módulo. Ele não entra no reator dos outros, inclusive do `omnileito-comum`. Esse módulo é uma biblioteca: JWT, erros, filas e as mensagens da saga. Ele não tem `main` e não escuta porta. Os seis serviços dependem do jar `com.unesp:omnileito-comum:0.0.1-SNAPSHOT`, que o `install` gravou em `~/.m2`. Sem esse jar, o `-pl` para na resolução da dependência e o serviço não sobe. `./mvnw test` compila o comum dentro da build, mas não publica o jar. Teste verde não substitui o `install`.
 
-# Porta do Servidor Spring Boot
-server.port=8084
+Rode o `install` de novo depois de mudar qualquer classe em `omnileito-comum`. O processo que já está no ar continua com o jar antigo até ser reiniciado. Mudança só dentro de um serviço, por exemplo `ms-leitos`, pede reiniciar aquele processo. O `install` geral não é obrigatório nesse caso, porque o `spring-boot:run` recompila o módulo pedido no `-pl`.
 
-# Configuração de Conexão com o MySQL
-spring.datasource.url=jdbc:mysql://localhost:3306/omnileito
-#username e password podem variar de máquina para máquina
-spring.datasource.username=root 
-spring.datasource.password=root123
-spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+Suba o gateway por último. As rotas passam a responder quando identidade, ocorrências, frota, leitos e notificações já escutam nas portas 8092 a 8096.
 
-# Configuração do Flyway
-spring.flyway.enabled=true
-spring.flyway.baseline-on-migrate=true
-spring.flyway.locations=classpath:db/migration
-
-# JPA / Hibernate
-spring.jpa.hibernate.ddl-auto=none
-spring.jpa.show-sql=true
-spring.jpa.properties.hibernate.format_sql=true
-
-# Swagger UI / OpenAPI Customizado
-springdoc.api-docs.path=/api-docs
-springdoc.swagger-ui.path=/swagger-ui-entity.html
-springdoc.swagger-ui.operationsSorter=method
-```[cite: 1]
-
-### 3. Executar a Aplicação
-
-**Via Terminal (Maven Wrapper):**
 ```bash
-./mvnw clean spring-boot:run
+./mvnw -pl ms-identidade spring-boot:run
+./mvnw -pl ms-ocorrencias spring-boot:run
+./mvnw -pl ms-frota spring-boot:run
+./mvnw -pl ms-leitos spring-boot:run
+./mvnw -pl ms-notificacoes spring-boot:run
+./mvnw -pl api-gateway spring-boot:run
 ```
 
-### 3. Via IDE (IntelliJ IDEA):
+O hospital da demonstração não tem endpoint. O MS-Leitos sorteia `ACEITE`, `RECUSA` ou `SILENCIO` a cada reserva. Para fixar o resultado, encerre só o processo da porta 8095 e suba de novo:
 
-Localize a classe principal com.unesp.omnileito.OmnileitoApplication e clique em Run
+```bash
+./mvnw -pl ms-leitos spring-boot:run -Dspring-boot.run.arguments=--omnileito.reserva.resultado=ACEITE
+```
 
-## 🧪 Como Testar a Aplicação
+Troque `ACEITE` por `RECUSA` ou `SILENCIO`. Vazio, o padrão, volta a ser aleatório.
 
-### 1. Acessar a Documentação Interativa (Swagger UI)
-Com o Spring Boot rodando na porta `8084`, acesse no seu navegador:
+O prazo de uma reserva `RESERVADO` sem confirmação é `omnileito.reserva.expiracao-minutos` (padrão `2`). O job varre a cada `omnileito.reserva.varredura-ms` (padrão `15000`). Reserva confirmada não expira.
 
-👉 **`http://localhost:8084/swagger-ui-entity.html`**
+Cada serviço publica o próprio Swagger. O gateway, na porta 8085, não tem essa página. O endereço antigo `http://localhost:8085/swagger-ui/index.html#/despacho-controller/iniciarDespacho` era do monolito e responde 404.
 
-### 2. Disparar uma Ocorrência (Endpoint REST)
-No controller **Despachos**, execute a requisição `POST /api/despachos` enviando o seguinte JSON no corpo da requisição:
+| Serviço | Swagger |
+| --- | --- |
+| Identidade | http://localhost:8092/swagger-ui.html |
+| Ocorrências | http://localhost:8093/swagger-ui.html |
+| Frota | http://localhost:8094/swagger-ui.html |
+| Leitos | http://localhost:8095/swagger-ui.html |
+| Notificações | http://localhost:8096/swagger-ui.html |
+
+O despacho está no Swagger de ocorrências, no `OcorrenciaController`: abrir a ocorrência, consultar pelo id e `POST /api/ocorrencias/{ocorrenciaId}/despachos`. A operação `iniciarDespacho` não existe mais.
+
+Testes de unidade, sem infraestrutura:
+
+```bash
+./mvnw test
+```
+
+O passo a passo das chamadas, do cache, da recusa, do prazo e do circuito está em [docs/roteiro-de-testes.md](docs/roteiro-de-testes.md).
+
+## Carga inicial
+
+O Flyway grava isto na primeira subida de cada schema.
+
+| Recurso | Estado |
+| --- | --- |
+| Regulador `regulador` / `regulador` | senha guardada em BCrypt. O SQL insere um sentinela e o arranque troca pelo hash |
+| Ambulância 1 `ABC-1234` | `DISPONIVEL` |
+| Ambulância 2 `XYZ-5678` | `DISPONIVEL` |
+| `L-UTI-01`, Hospital Central | `UTI`, `LIVRE` |
+| `L-UTI-02`, Hospital Central | `UTI`, `OCUPADO` |
+| `L-EMG-01`, UPA Norte | `EMERGENCIA`, `LIVRE` |
+| `L-EMG-02`, UPA Norte | `EMERGENCIA`, `OCUPADO` |
+| `L-ENF-01`, Hospital Central | `ENFERMARIA`, `LIVRE` |
+| `L-ENF-02`, Hospital Central | `ENFERMARIA`, `OCUPADO` |
+
+Cada especialidade tem um único leito livre. Se a unidade recusa ou o prazo estoura e não há outro compatível, a busca seguinte pode reservar esse mesmo leito de novo.
+
+Para voltar a essa carga, pare os seis processos Java e apague só os bancos do OmniLeito na porta 3310, o banco `omnileito_notificacoes` e as chaves do Redis deste projeto. O comando está na seção 2 do roteiro de testes.
+
+## Autenticação
+
+`POST /api/auth/login` não exige token.
+
+```bash
+curl -s -X POST http://localhost:8085/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"usuario":"regulador","senha":"regulador"}'
+```
+
+Resposta `200`:
 
 ```json
-{
-  "ocorrenciaId": "OC-1001",
-  "tipoLeitoNecessario": "UTI"
-}
-```
-### 3. Validar a Persistência no Banco de Dados
-Abra o DBeaver ou seu cliente MySQL e consulte a base omnileito para validar as atualizações de estado em tempo real:
-
-```SQL
--- 1. Verifica se a Ocorrência foi salva com status DESPACHADA e com os IDs alocados
-SELECT * FROM omnileito.ocorrencias WHERE id = 'OC-1001';
-
--- 2. Verifica se uma Ambulância mudou do status DISPONIVEL para ALOCADA
-SELECT * FROM omnileito.ambulancias;
-
--- 3. Verifica se um Leito do tipo UTI mudou do status LIVRE para RESERVADO
-SELECT * FROM omnileito.leitos WHERE tipo_especialidade = 'UTI';
+{ "token": "<jwt>", "tipo": "Bearer" }
 ```
 
-## 📂 Estrutura do Projeto
-A aplicação está organizada no pacote base com.unesp.omnileito:
+As outras rotas `/api/**` exigem `Authorization: Bearer <jwt>`. Usuário ou senha inválidos: `401`, `codigo` `CREDENCIAL_INVALIDA`. Token ausente ou inválido: `401`, `codigo` `TOKEN_INVALIDO`.
 
-```
-com.unesp.omnileito
-├── configuration/     # Declaração das Exchanges, Queues, Bindings e Conversores JSON
-├── controller/        # Endpoints REST expostos pela aplicação (DespachoController)
-├── domain/            # Entidades JPA (Ocorrencia, Ambulancia, Leito)
-│    └── enums/        # Status do negócio (StatusOcorrencia, StatusAmbulancia, StatusLeito, StatusSaga)
-├── dto/               # Objetos de Transferência de Dados (DTOs de requisição e eventos)
-├── listener/          # Consumidores assíncronos das filas RabbitMQ (@RabbitListener)
-├── repository/        # Repositórios Spring Data JPA (Interfaces MySQL)
-└── service/           # Orquestrador da Saga e regras de compensação
+Corpo de erro, em qualquer serviço:
+
+```json
+{ "codigo": "OCORRENCIA_NAO_ENCONTRADA", "mensagem": "Ocorrência não encontrada." }
 ```
 
-## 🔄 Funcionamento do Padrão Saga (Orquestrado)
-Abaixo o fluxo do Padrão Saga para quem tiver curiosidade de saber como é a mágica por trás: 
+| HTTP | Quando |
+| --- | --- |
+| 400 | Campo ausente ou valor fora da lista. `codigo` `CAMPO_INVALIDO` |
+| 401 | Credencial ou token inválido |
+| 404 | Ocorrência inexistente. `codigo` `OCORRENCIA_NAO_ENCONTRADA` |
+| 409 | Despacho de ocorrência `CANCELADA` ou `CONCLUIDA`. `codigo` `OCORRENCIA_NAO_ABERTA` |
+| 503 | Circuito de leitos aberto. `codigo` `SERVICO_LEITOS_INDISPONIVEL` |
 
+## Rotas do gateway
+
+O prefixo público é `/api`. O gateway encaminha pelo caminho.
+
+| Método e caminho | Serviço | Auth |
+| --- | --- | --- |
+| `POST /api/auth/login` | identidade | não |
+| `POST /api/ocorrencias` | ocorrências | sim |
+| `GET /api/ocorrencias/{id}` | ocorrências | sim |
+| `POST /api/ocorrencias/{id}/despachos` | ocorrências | sim |
+| `GET /api/ambulancias/disponiveis` | frota | sim |
+| `GET /api/leitos/disponiveis?tipoLeito=` | leitos | sim, com timeout, retry e circuit breaker |
+| `GET /api/notificacoes?ocorrenciaId=` | notificações | sim |
+
+### Abrir ocorrência
+
+Não publica mensagem e não dispara a saga. O tipo de leito fica fixo aqui. O despacho não aceita outro.
+
+`prioridade`: `VERMELHA`, `AMARELA`, `VERDE`. `tipoLeito`: `UTI`, `EMERGENCIA`, `ENFERMARIA`.
+
+```bash
+curl -s -X POST http://localhost:8085/api/ocorrencias \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"paciente":{"nome":"Maria Souza"},"local":"Rua das Flores, 120","prioridade":"VERMELHA","tipoLeito":"UTI"}'
 ```
-[POST /api/despachos]
-        │
-        ▼
- (SagaOrchestratorService) ──► Publica evento na exchange `saga.exchange`
-                                         │
-                                         ▼
-                             [saga.alocar-ambulancia.queue]
-                                         │
-                                         ▼
- (SagaEventListener) ────────► Busca e aloca Ambulância DISPONIVEL no MySQL
-        │
-        ├─► (Sucesso) ───────► Envia para [saga.reservar-leito.queue] ──► Reserva Leito LIVRE ──► Finaliza como DESPACHADA
-        │
-        └─► (Falha Leito) ───► Dispara fila de compensação [saga.liberar-ambulancia.queue] ──► Devolve Ambulância para DISPONIVEL
+
+Resposta `201`, status `ABERTA`, `ambulanciaId` e `leitoId` nulos. Guarde o `id`.
+
+### Despachar
+
+Corpo vazio. O `202` só avisa que a saga começou. O estado final se lê no `GET`.
+
+```bash
+curl -s -D - -X POST http://localhost:8085/api/ocorrencias/$ID/despachos \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+
+curl -s http://localhost:8085/api/ocorrencias/$ID \
+  -H "Authorization: Bearer $TOKEN"
 ```
+
+| Situação da ocorrência | HTTP | Efeito |
+| --- | --- | --- |
+| `ABERTA` | 202 | Passa a `EM_DESPACHO` e, depois do commit, publica `AlocarAmbulancia` |
+| Saga já iniciada (`EM_DESPACHO`, `DESPACHADA` ou `FALHA_DESPACHO`) | 200 | Devolve o estado atual. Não aloca outra ambulância nem outro leito |
+| Inexistente | 404 | — |
+| `CANCELADA` ou `CONCLUIDA` | 409 | — |
+
+`FALHA_DESPACHO` não volta sozinho para `ABERTA`.
+
+### Consultas
+
+`GET /api/ambulancias/disponiveis` lista só `DISPONIVEL`.
+
+`GET /api/leitos/disponiveis?tipoLeito=UTI` exige o tipo e lista só leitos `LIVRE` daquela especialidade. `OCUPADO` e leito de outra especialidade não entram. Com a carga intacta, UTI devolve só `L-UTI-01` do Hospital Central.
+
+`GET /api/notificacoes?ocorrenciaId=` exige o id e devolve da mais recente para a mais antiga. Tipos: `DESPACHO`, `EXPIRACAO`, `FALTA_LEITO`. Não há SMS. O alerta é esse registro. O mesmo trio `ocorrenciaId`, `tipo` e `ocorridaEm` não gera segunda linha. O horário na resposta pode aparecer em UTC (`Z`); é o mesmo instante gravado.
+
+## Saga
+
+A chave de idempotência é o id da ocorrência. A mensagem só sai depois do commit de quem a originou. Consumir de novo a mesma ocorrência não cria segunda alocação nem segunda reserva ativa.
+
+Exchanges direct: `omnileito.saga` e `omnileito.notificacao`. A routing key é o nome da fila.
+
+| Mensagem | Fila | Publica | Consome |
+| --- | --- | --- | --- |
+| `AlocarAmbulancia` | `saga.alocar-ambulancia` | ocorrências | frota |
+| `AmbulanciaAlocada` | `saga.ambulancia-alocada` | frota | ocorrências |
+| `ReservarLeito` | `saga.reservar-leito` | ocorrências | leitos |
+| `LeitoReservado` | `saga.leito-reservado` | leitos | ocorrências |
+| `LeitoExpirado` | `saga.leito-expirado` | leitos | ocorrências |
+| `AtualizarAmbulancia` | `saga.atualizar-ambulancia` | ocorrências | frota |
+| `RetentarBuscaLeito` | `saga.retentar-busca-leito` | leitos | ocorrências |
+| `RegistrarNotificacao` | `notificacao.registrar` | ocorrências e leitos | notificações |
+
+`AtualizarAmbulancia` só aceita `DISPONIVEL`, `DESPACHADA` ou `AGUARDANDO_LEITO`.
+
+### Aceite ou silêncio na primeira reserva
+
+1. O despacho grava `EM_DESPACHO` e publica `AlocarAmbulancia`.
+2. A frota escolhe uma ambulância `DISPONIVEL`, grava `ALOCADA` ligada à ocorrência e responde `AmbulanciaAlocada`. Se essa ocorrência já tiver ambulância, devolve a mesma.
+3. Ocorrências publica `ReservarLeito` com `tentativa` 1 e o `tipoLeito` da abertura.
+4. Leitos reserva um `LIVRE` dessa especialidade. No aceite, o leito fica `RESERVADO` e confirmado. No silêncio, fica `RESERVADO` sem confirmação, com `reservado_em`.
+5. Ocorrências grava `DESPACHADA`, o id da ambulância, o id do leito e o nome da unidade.
+6. Publica `AtualizarAmbulancia` com `DESPACHADA` e `RegistrarNotificacao` com `DESPACHO`.
+
+`DESPACHADA` segura os dois recursos. A confirmação da unidade é outro passo: no silêncio ela ainda não aconteceu, e o job pode expirar essa reserva.
+
+### Sem ambulância
+
+`AmbulanciaAlocada` vem com `motivo` `SEM_AMBULANCIA`. A ocorrência fica `FALHA_DESPACHO`. Nenhum leito é reservado.
+
+### Sem leito na primeira tentativa
+
+Não existe leito `LIVRE` da especialidade, nem entre os já recusados. `LeitoReservado` vem com `SEM_LEITO_COMPATIVEL` e `tentativa` 1. A ambulância volta a `DISPONIVEL`, porque a equipe ainda não saiu, e a ocorrência fica `FALHA_DESPACHO`.
+
+### Recusa ou prazo
+
+O leito recusado ou expirado volta a `LIVRE`. `EXPIRADO` só existe dentro da transação; o commit grava `LIVRE`. O histórico fica em `reserva_recusada` (uma linha por evento) e em `leito_excluido` (uma linha por par ocorrência e leito, atualizada se o mesmo leito se repetir).
+
+A ambulância fica `AGUARDANDO_LEITO`: a equipe já está no chamado, em atendimento ou a caminho, à espera do destino. A ocorrência volta a `EM_DESPACHO`. Ocorrências publica `AtualizarAmbulancia` e um novo `ReservarLeito`, com a tentativa somada.
+
+A busca pede primeiro um leito `LIVRE` da mesma especialidade que não esteja na lista. Se não houver, pede de novo um leito dessa lista, inclusive o que acabou de voltar a `LIVRE`. Cada reserva nova passa outra vez pelo sorteio do hospital.
+
+No prazo, o MS-Leitos também publica `RegistrarNotificacao` com `EXPIRACAO`. A origem dessa trilha é `MS-Leitos`. As outras são `MS-Ocorrencias`.
+
+### Nova busca ainda sem vaga
+
+`SEM_LEITO_COMPATIVEL` com tentativa maior que 1 deixa a ocorrência em `EM_DESPACHO` e a ambulância em `AGUARDANDO_LEITO`. Ocorrências publica `FALTA_LEITO`. A ambulância não volta para `DISPONIVEL`. Esse motivo só aparece quando não há nenhum `LIVRE` da especialidade.
+
+No fim de cada varredura, se a especialidade tiver ao menos um `LIVRE`, o MS-Leitos publica `RetentarBuscaLeito`. Ocorrências republica `ReservarLeito` para cada ocorrência `EM_DESPACHO` daquele tipo que já tenha ambulância, leito vazio e tentativa maior que 1.
+
+### Quadro
+
+| Evento | Ocorrência | Ambulância | Leito |
+| --- | --- | --- | --- |
+| Abertura | `ABERTA` | nenhuma ligada | nenhum |
+| Despacho aceito na API | `EM_DESPACHO` | ainda nenhuma | nenhum |
+| Ambulância alocada | `EM_DESPACHO` | `ALOCADA` | nenhum |
+| Sem ambulância livre | `FALHA_DESPACHO` | como estavam | nenhum |
+| Reserva aceita | `DESPACHADA` | `DESPACHADA` | `RESERVADO` confirmado |
+| Reserva em silêncio | `DESPACHADA` | `DESPACHADA` | `RESERVADO` sem confirmação |
+| Sem leito na primeira tentativa | `FALHA_DESPACHO` | `DISPONIVEL` | nenhum |
+| Recusa ou prazo | `EM_DESPACHO` | `AGUARDANDO_LEITO` | o leito volta a `LIVRE` |
+| Nova busca sem nenhum `LIVRE` da especialidade | `EM_DESPACHO` | `AGUARDANDO_LEITO` | nenhum |
+| O único `LIVRE` é o que acabou de voltar | conforme o novo sorteio | `DESPACHADA` no aceite ou no silêncio; `AGUARDANDO_LEITO` numa nova recusa | reservado de novo, ou `LIVRE` se a unidade recusar outra vez |
+
+Com `resultado=RECUSA` e um único leito livre da especialidade, a saga pede esse leito de novo e o ciclo continua. Vale para uma demonstração curta: depois de ver a ambulância em `AGUARDANDO_LEITO`, encerre o MS-Leitos.
+
+## Cache
+
+| Chave | Conteúdo |
+| --- | --- |
+| `frota:disponiveis` | Ambulâncias `DISPONIVEL` |
+| `leitos:disponiveis:{TIPO}` | Leitos `LIVRE` da especialidade. Ex.: `leitos:disponiveis:UTI` |
+
+A leitura usa o cache. Se a chave não existe ou o Redis não responde, a consulta lê o MySQL e tenta preencher o cache. Alocar, voltar a `DISPONIVEL`, passar a `DESPACHADA` ou a `AGUARDANDO_LEITO` apaga `frota:disponiveis`. Reservar, confirmar, recusar, expirar ou devolver o leito a `LIVRE` apaga a chave daquela especialidade.
+
+## Circuito da consulta de leitos
+
+Só `GET /api/leitos/disponiveis` passa pelo Resilience4j. Abertura e despacho seguem com o circuito aberto.
+
+| Parâmetro | Valor |
+| --- | --- |
+| Janela | 4 chamadas |
+| Mínimo de chamadas | 2 |
+| Taxa de falha para abrir | 50% |
+| Tempo aberto | 10 s |
+| Timeout | 2 s |
+| Tentativas | 3 |
+
+O fallback responde `503` com `codigo` `SERVICO_LEITOS_INDISPONIVEL`. Para ver isso, pare só o processo da porta 8095 e repita a consulta. Login e `POST /api/ocorrencias` continuam respondendo.
+
+## Documentos
+
+| Arquivo | Conteúdo |
+| --- | --- |
+| [docs/documento-de-requisitos.md](docs/documento-de-requisitos.md) | Requisitos, versão 0.3 |
+| [docs/contratos-entre-servicos.md](docs/contratos-entre-servicos.md) | Rotas, mensagens e conversas da saga, versão 0.2 |
+| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | Tabelas, índices e a regra do `UPDATE` da reserva, versão 0.2 |
+| [docs/maquina-de-estados.md](docs/maquina-de-estados.md) | Estados de ocorrência, ambulância e leito, versão 0.2 |
+| [docs/roteiro-de-testes.md](docs/roteiro-de-testes.md) | Como exercitar cada processo já implementado |
+| [docs/ajustes-para-adequacao.md](docs/ajustes-para-adequacao.md) | Plano que originou esta implementação |
+| [docs/proposta-workshop-praticas.md](docs/proposta-workshop-praticas.md) | Proposta do grupo |
+| [docs/como-testar-localmente-monolito.md](docs/como-testar-localmente-monolito.md) | Roteiro do monolito antigo. O sistema atual é o deste README |
+
+Os PDF ao lado dos markdown de requisitos, contratos, modelo e máquina de estados acompanham a mesma versão do texto.

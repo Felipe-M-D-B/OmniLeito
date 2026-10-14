@@ -10,7 +10,7 @@ Cada serviço tem o próprio banco. Não há chave estrangeira entre eles. O id 
 Convenções:
 
 - MySQL 8, InnoDB, `utf8mb4`. Coluna em snake_case. O JSON da API permanece em camelCase, como no contrato.
-- Na máquina local, os schemas ficam no MySQL da porta 3310: `omnileito_identidade`, `omnileito_ocorrencias`, `omnileito_frota`, `omnileito_leitos`. O MongoDB usa o database `omnileito_notificacoes`. Nada disso usa o banco do Ameppre nem o do Coneximob.
+- Os schemas ficam no MySQL da porta 3310: `omnileito_identidade`, `omnileito_ocorrencias`, `omnileito_frota`, `omnileito_leitos`. O MongoDB usa o database `omnileito_notificacoes`.
 - Senha de regulador só entra como hash. A carga guarda o hash de `regulador`, nunca o texto puro em coluna de aplicação.
 - `EXPIRADO` não permanece gravado. Dentro da transação o leito passa por esse status e o commit deixa `LIVRE`. O histórico guarda o motivo.
 - O cache não é fonte da verdade. MySQL é. Redis só guarda a lista de disponíveis e é apagado em toda escrita de ocupação.

@@ -193,7 +193,7 @@ Carga do estudo de caso:
 - **RNF03.** Entrega das mensagens at-least-once, com consumidor idempotente.
 - **RNF04.** A interface de demonstração é o Swagger de cada serviço, acessado pela regulação através do gateway.
 - **RNF05.** Testes JUnit 5 cobrem alocação exclusiva, idempotência, compensação do primeiro leito inexistente (ambulância volta a DISPONIVEL) e o desfecho de recusa ou prazo (ambulância fica AGUARDANDO_LEITO e uma nova reserva da mesma especialidade é pedida).
-- **RNF06.** Docker Compose sobe MySQL, MongoDB, Redis e RabbitMQ. Nesta máquina de desenvolvimento, os containers do Coneximob e do Ameppre não são usados nem interrompidos.
+- **RNF06.** Docker Compose sobe MySQL, MongoDB, Redis e RabbitMQ.
 
 ## 11. Critérios de aceitação do estudo de caso
 
