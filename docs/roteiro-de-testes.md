@@ -1,10 +1,10 @@
-# Roteiro de testes — processos já implementados
+# Roteiro de testes
 
-Versão 0.1 — 13/10/2026.
+Versão 0.2 — 15/10/2026.
 
-Este roteiro cobre o que já está nos módulos: login, abertura, despacho, saga, cache, prazo da reserva, notificações e o circuito do gateway. As chamadas do regulador entram por `http://localhost:8085`.
+Este roteiro cobre login, abertura, despacho, saga, cache, prazo da reserva, notificações e o circuito do gateway. As chamadas do regulador entram por `http://localhost:8085`.
 
-O arquivo `docs/como-testar-localmente-monolito.md` descreve o monolito antigo. Para o sistema atual, siga este roteiro.
+É preciso Java 21. O `./mvnw` com o Java 11 do sistema não sobe os serviços.
 
 ## 1. O que precisa estar no ar
 
@@ -46,7 +46,15 @@ docker compose ps
 
 Os dados ficam em volumes nomeados. `docker compose down` remove os containers e preserva os dados; `docker compose down -v` também remove os volumes e reinicia os bancos do zero.
 
-Na pasta do projeto, um terminal por serviço:
+O MS-Notificacoes lê `spring.mongodb.uri`. O padrão é `mongodb://localhost:27018/omnileito_notificacoes`. Se o terminal tiver `OMNILEITO_MONGO_URI`, esse valor substitui o padrão. A porta do host é 27018. Dentro do container o Mongo continua na 27017.
+
+Na pasta do projeto, uma vez, para publicar o `omnileito-comum`:
+
+```bash
+./mvnw -DskipTests install
+```
+
+O `-pl` não monta esse módulo. Sem o jar no Maven local, o serviço não sobe. Um terminal por serviço, o gateway por último:
 
 ```bash
 ./mvnw -pl ms-identidade spring-boot:run
@@ -65,9 +73,9 @@ O MS-Leitos, sem argumento, sorteia `ACEITE`, `RECUSA` ou `SILENCIO`. Para um re
 ./mvnw -pl ms-leitos spring-boot:run -Dspring-boot.run.arguments=--omnileito.reserva.resultado=SILENCIO
 ```
 
-O prazo da reserva sem confirmação é `omnileito.reserva.expiracao-minutos=2`. O job olha a fila a cada 15 segundos.
+O prazo da reserva sem confirmação é `omnileito.reserva.expiracao-minutos=2`. A cada 15 segundos (`omnileito.reserva.varredura-ms=15000`) o MS-Leitos procura, no MySQL, leito `RESERVADO`, `confirmado` falso e `reservado_em` anterior ao prazo. Reserva com aceite não entra. O job não lê fila do RabbitMQ.
 
-Cada serviço publica o próprio Swagger. O gateway, na porta 8085, não tem essa página. O endereço antigo `http://localhost:8085/swagger-ui/index.html#/despacho-controller/iniciarDespacho` era do monolito e responde 404.
+Cada serviço publica o próprio Swagger. O gateway, na porta 8085, não tem essa página.
 
 | Serviço | Swagger |
 | --- | --- |
@@ -77,11 +85,11 @@ Cada serviço publica o próprio Swagger. O gateway, na porta 8085, não tem ess
 | Leitos | http://localhost:8095/swagger-ui.html |
 | Notificações | http://localhost:8096/swagger-ui.html |
 
-O despacho está no Swagger de ocorrências, no `OcorrenciaController`: abrir a ocorrência, consultar pelo id e `POST /api/ocorrencias/{ocorrenciaId}/despachos`. A operação `iniciarDespacho` não existe mais.
+O despacho está no Swagger de ocorrências, no `OcorrenciaController`: abrir a ocorrência, consultar pelo id e `POST /api/ocorrencias/{ocorrenciaId}/despachos`.
 
 ## 2. Voltar à carga inicial
 
-O banco desta máquina já tem despachos dos testes de 13/10, inclusive a ambulância `TST-9001`. Os cenários da seção 4 em diante pedem as duas ambulâncias `DISPONIVEL` e um leito `LIVRE` por especialidade. Antes deles, pare os seis processos Java e rode:
+A primeira subida, com MySQL vazio, já grava a carga pelo Flyway. Os cenários a partir da seção 8 gastam ambulâncias e leitos. Para recomeçar, pare os seis processos Java e rode:
 
 ```bash
 mysql -h127.0.0.1 -P3310 -uroot -proot123 -e "
@@ -108,19 +116,45 @@ O esperado é duas ambulâncias `DISPONIVEL` e seis leitos, três `LIVRE` e trê
 
 ## 3. Testes automatizados
 
-Na pasta do projeto, sem subir a infraestrutura:
+Na pasta do projeto:
 
 ```bash
 ./mvnw test
 ```
 
-Eles cobrem o que o roteiro manual também exercita, e dois casos difíceis de isolar com um único leito livre:
+O comando roda o JUnit. Não usa o Docker, não abre as portas 8085 e 8092 a 8096 e não grava no MySQL, no Redis, no Mongo nem no RabbitMQ. Pode ser executado com a infraestrutura desligada. Se ela estiver no ar, os testes também não a tocam.
 
-| Módulo | O que o teste garante |
-| --- | --- |
-| ms-ocorrencias | Abertura não publica mensagem. Segundo despacho não aloca de novo. `FALHA_DESPACHO` não recomeça. Primeira busca sem leito devolve a ambulância. Recusa deixa a ambulância no chamado e pede outro leito. Busca seguinte sem leito publica `FALTA_LEITO` |
-| ms-leitos | Havendo outro leito da especialidade, a reserva evita o recusado. Sendo ele o único `LIVRE`, o mesmo leito é reservado de novo. Sem nenhum `LIVRE`, o motivo é `SEM_LEITO_COMPATIVEL` |
-| ms-frota | A mesma ocorrência recebe a mesma ambulância. Voltar a `DISPONIVEL` solta a ocorrência |
+O fim esperado é `BUILD SUCCESS`. Nesta suíte são 7 testes em ocorrências, 2 na frota e 3 em leitos, todos com `Failures: 0`. As linhas `WARNING` do Mockito são um aviso do Java para versões futuras. Não são falha.
+
+O Maven não aceita o nome da classe no lugar de `test`. `./mvnw OcorrenciaSagaServiceTest` para com `Unknown lifecycle phase`. Para rodar uma classe só, o `-pl` limita o módulo e o `-Dtest` escolhe a classe:
+
+```bash
+./mvnw -pl ms-ocorrencias test -Dtest=OcorrenciaSagaServiceTest
+./mvnw -pl ms-leitos test -Dtest=LeitoServiceTest
+./mvnw -pl ms-frota test -Dtest=FrotaServiceTest
+```
+
+Cada teste chama a regra de negócio com repositórios falsos. O serviço decide o próximo passo e o teste confere essa decisão. São três classes.
+
+`OcorrenciaSagaServiceTest` cobre a saga:
+
+- Abrir uma ocorrência não publica mensagem. O despacho é que começa a saga.
+- Despachar de novo a mesma ocorrência não pede outra ambulância.
+- Ocorrência em `FALHA_DESPACHO` não recomeça.
+- Ocorrência `CANCELADA` responde conflito.
+- Na primeira busca, se não há leito livre, a ambulância volta a `DISPONIVEL`.
+- Na recusa, a ambulância fica no chamado e a saga pede outro leito.
+- Se essa busca seguinte também não acha leito, a ambulância não volta para a base e sai a notificação `FALTA_LEITO`.
+
+`LeitoServiceTest` cobre a escolha do leito. A carga real tem um único leito `LIVRE` por especialidade, então estes casos não aparecem nas seções manuais:
+
+- Se existe outro leito livre da mesma especialidade, a reserva não repete o que foi recusado.
+- Se o recusado é o único `LIVRE`, ele é pedido de novo.
+- Se não há nenhum `LIVRE`, o motivo é `SEM_LEITO_COMPATIVEL`.
+
+`FrotaServiceTest` cobre a ambulância. A mesma ocorrência recebe sempre a mesma ambulância, e ela só volta a `DISPONIVEL` quando a saga pede isso.
+
+Estes testes não substituem as seções 4 a 13. O `./mvnw test` mostra que a regra está certa no código. O `curl` no gateway mostra que MySQL, RabbitMQ, Redis, Mongo e os seis processos fazem essa regra acontecer de ponta a ponta.
 
 ## 4. Preparar a chamada
 
@@ -132,6 +166,7 @@ TOKEN=$(curl -s -X POST "$BASE/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d '{"usuario":"regulador","senha":"regulador"}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+  echo "$TOKEN"
 ```
 
 Para acompanhar um despacho até o estado final:
@@ -143,11 +178,44 @@ consultar() {
 }
 ```
 
-Repita `consultar <id>` por alguns segundos. O `202` só diz que a saga começou.
+Definir a função não imprime nada. O token e a função valem só neste terminal.
+
+`consultar` não abre ocorrência e não despacha. Ela só lê uma ocorrência que já existe. O `<id>` do texto não se digita assim: é o valor do campo `id` que o `POST /api/ocorrencias` devolve, na seção 7. É um UUID. O número `3f2a1c0e-7b44-4d1a-9c88-0a1b2c3d4e5f` abaixo é só o formato. Consultá-lo responde `404` e `OCORRENCIA_NAO_ENCONTRADA`, porque essa ocorrência não foi aberta.
+
+A ordem é esta:
+
+1. Abra a ocorrência. A resposta `201` traz o `id` e `status` `ABERTA`. Copie o `id`.
+2. Despache com `POST /api/ocorrencias/ID/despachos`, trocando `ID` por esse valor. A resposta na hora é `202` e `status` `EM_DESPACHO`. Isso só diz que a saga começou. Ainda não há ambulância nem leito.
+3. No mesmo terminal, chame `consultar ID`. Repita o mesmo comando por alguns segundos, até o `status` sair de `EM_DESPACHO`.
+
+A abertura, no mesmo terminal em que `BASE` e `TOKEN` existem:
+
+```bash
+curl -s -X POST "$BASE/api/ocorrencias" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"paciente":{"nome":"Maria Souza"},"local":"Rua das Flores, 120","prioridade":"VERMELHA","tipoLeito":"UTI"}'
+```
+
+Esse comando não despacha. O `POST` vai ao gateway na porta 8085. O cabeçalho `Authorization` usa o token deste terminal; sem ele a resposta é `401`. O JSON pede leito de UTI, prioridade vermelha, em `Rua das Flores, 120`.
+
+A resposta esperada traz `"status":"ABERTA"`, `ambulanciaId` e `leitoId` nulos, e um `id` novo. Copie esse `id` para o comando seguinte. Para conferir o token antes: `echo "$TOKEN"`. Um texto começando com `eyJ` confirma o login.
+
+```bash
+consultar COLE_AQUI_O_ID_DA_ABERTURA
+```
+
+No aceite, o estado final é `DESPACHADA`, com `ambulanciaId` e `leitoId` preenchidos. Sem ambulância ou sem leito na primeira busca, o estado final é `FALHA_DESPACHO`. Para ver o token guardado: `echo "$TOKEN"`. Um texto começando com `eyJ` confirma o login.
 
 ## 5. Login, token e validação
 
 MS-Leitos neste bloco pode estar com qualquer resultado. Nenhuma destas chamadas despacha.
+
+`BASE` e `TOKEN` não passam para um terminal novo. Sem `BASE`, o `curl` não tem endereço, não imprime nada e fica esperando. Ctrl+C devolve o prompt. No terminal novo, antes dos comandos desta seção:
+
+```bash
+BASE=http://localhost:8085
+```
 
 ### 5.1 Login válido
 
@@ -171,11 +239,13 @@ Esperado: HTTP `401`, `codigo` `CREDENCIAL_INVALIDA`.
 
 ### 5.3 Rota protegida sem token
 
+Este comando não envia `Authorization`. É o caso de quem chama a rota sem ter feito login.
+
 ```bash
 curl -s -D - "$BASE/api/leitos/disponiveis?tipoLeito=UTI"
 ```
 
-Esperado: HTTP `401`, `codigo` `TOKEN_INVALIDO`.
+Esperado: HTTP `401`, `codigo` `TOKEN_INVALIDO`. A primeira linha da resposta é `HTTP/1.1 401`. O JSON vem em seguida.
 
 ### 5.4 Abertura com tipo fora da lista
 
@@ -199,7 +269,9 @@ Esperado: HTTP `404`, `codigo` `OCORRENCIA_NAO_ENCONTRADA`.
 
 ## 6. Consultas e cache
 
-Suba o MS-Leitos com `ACEITE` antes da seção 7. Esta seção só lê.
+Esta seção só lê. Não abre ocorrência e não despacha. O resultado `ACEITE` do MS-Leitos entra na seção 7.
+
+Use o mesmo terminal em que `BASE` e `TOKEN` já existem. Num terminal novo, defina os dois de novo. Sem `BASE`, o `curl` fica parado. Sem `TOKEN`, a resposta é `401`.
 
 ```bash
 curl -s "$BASE/api/ambulancias/disponiveis" -H "Authorization: Bearer $TOKEN"
@@ -212,24 +284,42 @@ curl -s "$BASE/api/leitos/disponiveis?tipoLeito=ENFERMARIA" -H "Authorization: B
 echo
 ```
 
-Esperado:
+Com a carga inicial, o esperado é:
 
 - Duas ambulâncias, `ABC-1234` e `XYZ-5678`, as duas `DISPONIVEL`.
-- UTI devolve só `L-UTI-01`. `L-UTI-02` está `OCUPADO` e não entra.
+- UTI devolve só `L-UTI-01`. `L-UTI-02` está `OCUPADO` e não entra na lista.
 - Emergência devolve só `L-EMG-01`. Enfermaria devolve só `L-ENF-01`.
 
-Repita a consulta de UTI. A segunda resposta vem do Redis. As chaves ficam em `frota:disponiveis` e `leitos:disponiveis:UTI`.
+Cada especialidade tem a própria lista. UTI, emergência e enfermaria não se misturam.
+
+O cache nasce na primeira leitura. Ninguém grava essas chaves na subida do serviço. A primeira consulta de ambulâncias lê o MySQL e grava `frota:disponiveis`. A primeira consulta de UTI lê o MySQL e grava `leitos:disponiveis:UTI`. Emergência e enfermaria fazem o mesmo, com o tipo no fim da chave.
+
+Repita só a consulta de UTI. A segunda resposta vem do Redis e o JSON é o mesmo. Antes de qualquer consulta, `KEYS` pode voltar vazio. Depois das quatro chamadas acima, as chaves existem:
 
 ```bash
 docker exec omnileito-redis redis-cli KEYS 'frota:*'
 docker exec omnileito-redis redis-cli KEYS 'leitos:*'
 ```
 
-Se o Redis estiver fechado, a mesma consulta ainda responde `200`: frota e leitos leem o MySQL.
+Se o Redis estiver fechado, a consulta continua em `200`. Frota e leitos ignoram a falha do cache e leem o MySQL. Uma reserva ou uma mudança de ambulância apaga a chave daquela lista. A consulta seguinte reconstrói a lista a partir do MySQL.
 
 ## 7. Aceite
 
-MS-Leitos com `--omnileito.reserva.resultado=ACEITE`. Banco na carga inicial.
+O hospital desta demonstração não tem tela. A cada reserva, o MS-Leitos sorteia `ACEITE`, `RECUSA` ou `SILENCIO`. Sem um resultado fixo, o despacho da Maria pode aceitar, recusar ou ficar em silêncio, e esta seção deixa de ser reproduzível.
+
+`ACEITE` significa que a unidade confirma o leito. A ocorrência vai a `DESPACHADA`, a ambulância a `DESPACHADA` e o leito fica `RESERVADO` com `confirmado` verdadeiro. O job de 2 minutos não expira reserva confirmada.
+
+O sorteio lê `omnileito.reserva.resultado` só na subida do processo. O MS-Leitos que já está na porta 8095, se subiu sem argumento, continua sorteando. Encerre só esse processo, com Ctrl+C no terminal dele. Identidade, ocorrências, frota, notificações e o gateway ficam no ar. Se subir outro MS-Leitos antes de encerrar o antigo, a porta 8095 responde `Endereço já em uso`.
+
+No terminal que ficou livre, na pasta do projeto:
+
+```bash
+./mvnw -pl ms-leitos spring-boot:run -Dspring-boot.run.arguments=--omnileito.reserva.resultado=ACEITE
+```
+
+Espere `Tomcat started on port 8095`. A partir daí, toda reserva deste processo é aceite.
+
+O banco precisa estar na carga inicial: ambulâncias `ABC-1234` e `XYZ-5678` em `DISPONIVEL`, e um leito `LIVRE` por especialidade (`L-UTI-01`, `L-EMG-01`, `L-ENF-01`). Abrir uma ocorrência, sem despachar, não gasta ambulância nem leito. Se a seção 6 ainda mostrou essas duas ambulâncias e o `L-UTI-01`, a carga serve. Se um despacho anterior já reservou a UTI ou segurou uma ambulância, volte à carga pela seção 2 antes de continuar.
 
 ### 7.1 Abrir
 
@@ -244,16 +334,26 @@ Esperado: HTTP `201`, `status` `ABERTA`, `ambulanciaId` e `leitoId` nulos. Copie
 
 ### 7.2 Despachar
 
+No mesmo terminal de `BASE` e `TOKEN`, com o MS-Leitos já no ar em `ACEITE`:
+
 ```bash
-curl -s -D - -X POST "$BASE/api/ocorrencias/ID/despachos" \
+curl -s -D - -X POST "$BASE/api/ocorrencias/COLE_O_ID_DA_ABERTURA/despachos" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{}'
 ```
 
-Esperado na hora: HTTP `202`, `status` `EM_DESPACHO`.
+Obs.: O `ID` da URL não se digita assim. É o valor do campo `id` copiado da resposta `201` da seção 7.1. É um UUID, no formato `14a15e94-5ef6-4da9-8ebd-6e25bba7cb4e`. Deixar as letras `ID` chama uma ocorrência que não existe e a resposta é `404`, `codigo` `OCORRENCIA_NAO_ENCONTRADA`.
 
-Alguns segundos depois, `consultar ID` devolve:
+Esperado na hora: HTTP `202`, `status` `EM_DESPACHO`. Isso só diz que a saga começou. Ainda não há ambulância nem leito.
+
+Alguns segundos depois, no mesmo terminal, `consultar` com o mesmo UUID. Não use a palavra `ID`:
+
+```bash
+consultar COLE_O_ID_DA_ABERTURA
+```
+
+Repita até o `status` sair de `EM_DESPACHO`. O esperado é:
 
 | Campo | Valor |
 | --- | --- |
@@ -265,7 +365,7 @@ Alguns segundos depois, `consultar ID` devolve:
 No MySQL, a ambulância 1 está `DESPACHADA` com essa ocorrência. `L-UTI-01` está `RESERVADO` e `confirmado` verdadeiro. `L-UTI-02` continua `OCUPADO`.
 
 ```bash
-curl -s "$BASE/api/notificacoes?ocorrenciaId=ID" -H "Authorization: Bearer $TOKEN"
+curl -s "$BASE/api/notificacoes?ocorrenciaId=COLE_O_ID_DA_ABERTURA" -H "Authorization: Bearer $TOKEN"
 ```
 
 Esperado: uma notificação `DESPACHO` citando `ABC-1234`, `L-UTI-01` e Hospital Central. O horário pode vir em UTC (`Z`); é o mesmo instante do despacho.
@@ -282,7 +382,16 @@ Esperado: HTTP `200`, o mesmo `ambulanciaId` e o mesmo `leitoId`. A ambulância 
 
 Ainda com `ACEITE`. A UTI livre já foi reservada na seção 7. A ambulância 2 continua livre.
 
-Abra outra ocorrência, paciente `Ana Costa`, local `Rua Sem Vaga, 1`, prioridade `VERMELHA`, tipo `UTI`. Despache.
+Abra outra ocorrência, no mesmo terminal de `BASE` e `TOKEN`:
+
+```bash
+curl -s -D - -X POST "$BASE/api/ocorrencias" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"paciente":{"nome":"Ana Costa"},"local":"Rua Sem Vaga, 1","prioridade":"VERMELHA","tipoLeito":"UTI"}'
+```
+
+Esperado: HTTP `201`, `status` `ABERTA`. Copie o `id` desta resposta. É outro UUID, não o da Maria. Despache com esse id, como na seção 7.2.
 
 Esperado, depois de alguns segundos:
 
@@ -325,20 +434,34 @@ Enquanto `resultado=RECUSA`, esse ciclo continua. Confirme uma volta e encerre o
 
 ## 11. Silêncio, prazo e a mesma vaga de novo
 
-Volte à carga inicial pela seção 2. Na subida, o MS-Leitos entra com `SILENCIO`.
+Volte à carga inicial pela seção 2. Encerre o MS-Leitos que estiver na porta 8095 e suba de novo com `SILENCIO`. Se a porta responder `Endereço já em uso`, o processo anterior ainda está no ar. Ctrl+Z só suspende: o processo continua ocupando a 8095 e um `kill` comum não o encerra. Use Ctrl+C no terminal dele.
 
-Abra uma UTI e despache.
+```bash
+./mvnw -pl ms-leitos spring-boot:run -Dspring-boot.run.arguments=--omnileito.reserva.resultado=SILENCIO
+```
 
-Esperado logo em seguida: ocorrência `DESPACHADA`, ambulância `DESPACHADA`, `L-UTI-01` `RESERVADO` com `confirmado` falso. Há notificação `DESPACHO`. O prazo ainda não correu para uma reserva confirmada; esta não está confirmada, então o job pode expirar.
+Abra uma UTI e despache, como na seção 7. O `202` só diz que a saga começou.
 
-Espere pouco mais de 2 minutos e consulte de novo.
+Esperado logo em seguida: ocorrência `DESPACHADA`, ambulância `DESPACHADA`, `L-UTI-01` `RESERVADO` com `confirmado` falso e `confirmado_em` vazio. Há notificação `DESPACHO`. Reserva com aceite não entra no job. Esta não está confirmada, então o prazo de 2 minutos corre.
 
-Esperado nessa janela:
+Espere pouco mais de 2 minutos. A varredura é a cada 15 segundos, então a liberação aparece na consulta seguinte, não no instante em que o relógio faz 2 minutos.
 
-1. Notificação `EXPIRACAO` para a mesma ocorrência.
-2. A ambulância passa por `AGUARDANDO_LEITO` e a ocorrência por `EM_DESPACHO`.
-3. `L-UTI-01` é o único `LIVRE` de UTI, então é reservado outra vez. Com `SILENCIO`, a ocorrência volta a `DESPACHADA` e a ambulância a `DESPACHADA`, no mesmo leito.
-4. `reserva_recusada` registra o motivo da expiração. O status gravado do leito não fica `EXPIRADO`: depois do commit ele está `LIVRE` ou, na reserva seguinte, `RESERVADO`.
+O estado visível volta ao mesmo lugar. A ocorrência segue `DESPACHADA`, a ambulância segue `DESPACHADA` e `L-UTI-01` segue `RESERVADO`. Isso não é falha. No meio do ciclo a ambulância passa por `AGUARDANDO_LEITO` e a ocorrência por `EM_DESPACHO`, mas a nova reserva com `SILENCIO` devolve os dois ao estado anterior antes de uma consulta espaçada pegar essa passagem. `L-UTI-01` é o único `LIVRE` de UTI, então é o leito pedido de novo.
+
+A prova está no MySQL, não na lista de status:
+
+```bash
+mysql -h127.0.0.1 -P3310 -uroot -proot123 -e "
+SELECT codigo, status, confirmado, confirmado_em, reservado_em
+FROM omnileito_leitos.leito WHERE codigo='L-UTI-01';
+SELECT ocorrencia_id, leito_id, motivo, ocorrido_em
+FROM omnileito_leitos.reserva_recusada;
+"
+```
+
+`confirmado` fica `0`. `reserva_recusada` ganha uma linha com motivo `EXPIRACAO` para essa ocorrência e o leito 1. O status gravado do leito não fica `EXPIRADO`: depois do commit ele está `LIVRE` por um instante e, na reserva seguinte, `RESERVADO`. Há também notificação `EXPIRACAO`.
+
+Enquanto `resultado=SILENCIO` e não houver outro leito `LIVRE` de UTI, o ciclo se repete a cada pouco mais de 2 minutos: expira, pede o mesmo leito e volta a `DESPACHADA`. Cada volta acrescenta outra linha `EXPIRACAO`. Confirme uma e encerre o MS-Leitos com Ctrl+C para o prazo não continuar girando.
 
 ## 12. Circuito da consulta de leitos
 
@@ -358,17 +481,21 @@ Suba o MS-Leitos de novo. Depois da janela de 10 segundos do circuito aberto, a 
 
 ## 13. Conferência das filas
 
-No painel `http://localhost:15672`, ao final de um aceite estável, estas filas ficam com 0 mensagens prontas e 1 consumidor cada:
+Abra `http://localhost:15672`, usuário `guest`, senha `guest`, aba Queues and Streams. São oito filas, todas `classic`, duráveis e `running`. A mensagem só entra na fila depois do commit do serviço que a publicou.
 
-- `saga.alocar-ambulancia`
-- `saga.ambulancia-alocada`
-- `saga.reservar-leito`
-- `saga.leito-reservado`
-- `saga.leito-expirado`
-- `saga.atualizar-ambulancia`
-- `saga.retentar-busca-leito`
-- `notificacao.registrar`
+| Fila | Quem publica | Quem consome |
+| --- | --- | --- |
+| `saga.alocar-ambulancia` | MS-Ocorrencias | MS-Frota |
+| `saga.ambulancia-alocada` | MS-Frota | MS-Ocorrencias |
+| `saga.reservar-leito` | MS-Ocorrencias | MS-Leitos |
+| `saga.leito-reservado` | MS-Leitos | MS-Ocorrencias |
+| `saga.leito-expirado` | MS-Leitos | MS-Ocorrencias |
+| `saga.atualizar-ambulancia` | MS-Ocorrencias | MS-Frota |
+| `saga.retentar-busca-leito` | MS-Leitos | MS-Ocorrencias |
+| `notificacao.registrar` | MS-Ocorrencias ou MS-Leitos | MS-Notificacoes |
 
-Mensagem presa em `notificacao.registrar` indica que o MS-Notificacoes não gravou. A consulta `GET /api/notificacoes` tem de devolver o alerta correspondente.
+Ao final de um despacho estável, cada fila fica com Ready `0`, Unacked `0` e Total `0`. As taxas incoming, deliver e ack em `0.00/s` só dizem que nada está passando agora. O trabalho da saga já foi consumido.
 
-Filas com sufixo `.queue` ou nome `saga.cancelar-leito.queue` e `saga.liberar-ambulancia.queue` são restos do monolito. O fluxo atual não publica nelas.
+A coluna de consumidores deve mostrar `1` em cada fila cujo serviço está no ar. Se o MS-Leitos estiver parado, como na seção 12, `saga.reservar-leito` fica com `0` consumidores. As outras filas de leito (`saga.leito-reservado`, `saga.leito-expirado`, `saga.retentar-busca-leito`) continuam com o consumidor do MS-Ocorrencias. Voltar o processo da porta 8095 devolve o consumidor de `saga.reservar-leito`.
+
+Ready maior que zero, ou Unacked que não cai, é mensagem presa. Em `notificacao.registrar`, isso indica que o MS-Notificacoes não gravou. A consulta `GET /api/notificacoes?ocorrenciaId=...` tem de devolver o alerta correspondente quando essa fila volta a zero.
