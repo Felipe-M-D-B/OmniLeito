@@ -13,6 +13,8 @@ public interface LeitoRepository extends JpaRepository<Leito, Long> {
 
 	Optional<Leito> findByOcorrenciaId(String ocorrenciaId);
 
+	Optional<Leito> findByCodigo(String codigo);
+
 	List<Leito> findByStatusAndTipoLeitoOrderById(StatusLeito status, String tipoLeito);
 
 	List<Leito> findByStatusAndTipoLeitoAndIdNotInOrderById(StatusLeito status, String tipoLeito, List<Long> ids);

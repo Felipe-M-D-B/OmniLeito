@@ -59,6 +59,10 @@ public class Leito {
 		this.status = status;
 	}
 
+	public Leito(UnidadeSaude unidade, String codigo, String tipoLeito, StatusLeito status) {
+		this(null, unidade, codigo, tipoLeito, status);
+	}
+
 	public Long getId() { return id; }
 	public UnidadeSaude getUnidade() { return unidade; }
 	public String getCodigo() { return codigo; }

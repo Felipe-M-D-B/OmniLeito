@@ -21,6 +21,22 @@ Este roteiro cobre login, abertura, despacho, saga, cache, prazo da reserva, not
 | ms-leitos | 8095 | Leitos, sorteio da unidade e prazo |
 | ms-notificacoes | 8096 | Alertas |
 
+São seis processos Spring Boot. O regulador fala só com o gateway, na porta 8085. No meio da saga, os serviços se falam pelo RabbitMQ, depois do commit.
+
+**api-gateway (8085).** Única entrada. Valida o JWT e encaminha a chamada ao serviço certo. Não tem banco. O Resilience4j fica só em `GET /api/leitos/disponiveis`: com o MS-Leitos parado, essa consulta responde `503`. Login, abertura e despacho continuam.
+
+**MS-Identidade (8092).** Login do regulador. Banco MySQL `omnileito_identidade`, tabela `regulador`, senha em hash BCrypt. O `POST /api/auth/login` confere usuário e senha e emite o JWT. A carga traz o usuário `regulador` / `regulador`. Os outros serviços validam o token e não consultam esse schema.
+
+**MS-Ocorrencias (8093).** Dono da saga. Banco MySQL `omnileito_ocorrencias`, com paciente, ocorrência, despacho e a lista de leitos já tentados. Abre a ocorrência, recebe o despacho e decide o próximo passo: pedir ambulância, pedir leito, registrar aceite, recusa, expiração ou falha. O id da ocorrência é o UUID gerado aqui.
+
+**MS-Frota (8094).** Ambulâncias. Banco MySQL `omnileito_frota` e cache Redis `frota:disponiveis`. Consome `saga.alocar-ambulancia` e `saga.atualizar-ambulancia`. Na carga, `ABC-1234` e `XYZ-5678` começam `DISPONIVEL`.
+
+**MS-Leitos (8095).** Leitos e hospital simulado. Banco MySQL `omnileito_leitos` e cache Redis `leitos:disponiveis:{TIPO}`. Consome `saga.reservar-leito`, sorteia `ACEITE`, `RECUSA` ou `SILENCIO` e publica o resultado. A cada 15 segundos varre o MySQL e expira reserva `RESERVADO` sem confirmação depois de 2 minutos. Esse job não lê fila.
+
+**MS-Notificacoes (8096).** Alerta e auditoria. Banco MongoDB `omnileito_notificacoes`, coleções `notificacoes` e `auditoria`. Consome `notificacao.registrar`, publicada pelo MS-Ocorrencias ou pelo MS-Leitos. No teste de silêncio, os documentos `DESPACHO` e `EXPIRACAO` nascem aqui.
+
+O módulo `omnileito-comum` é a biblioteca compartilhada: JWT, erros, nomes das filas e o publicador. Entra no build com `./mvnw -DskipTests install` e não sobe como sétimo processo.
+
 Carga inicial, criada pelo Flyway na primeira subida:
 
 | Recurso | Estado inicial |
@@ -479,7 +495,7 @@ No mesmo momento, o login e um `POST /api/ocorrencias` continuam respondendo `20
 
 Suba o MS-Leitos de novo. Depois da janela de 10 segundos do circuito aberto, a consulta de UTI volta a `200`.
 
-## 13. Conferência das filas
+## 13. Conferência das filas e das notificações
 
 Abra `http://localhost:15672`, usuário `guest`, senha `guest`, aba Queues and Streams. São oito filas, todas `classic`, duráveis e `running`. A mensagem só entra na fila depois do commit do serviço que a publicou.
 
@@ -494,8 +510,67 @@ Abra `http://localhost:15672`, usuário `guest`, senha `guest`, aba Queues and S
 | `saga.retentar-busca-leito` | MS-Leitos | MS-Ocorrencias |
 | `notificacao.registrar` | MS-Ocorrencias ou MS-Leitos | MS-Notificacoes |
 
-Ao final de um despacho estável, cada fila fica com Ready `0`, Unacked `0` e Total `0`. As taxas incoming, deliver e ack em `0.00/s` só dizem que nada está passando agora. O trabalho da saga já foi consumido.
+A coluna **Fila** é o canal. As colunas **Quem publica** e **Quem consome** nomeiam os microsserviços: MS-Ocorrencias, MS-Frota, MS-Leitos e MS-Notificacoes. Cada um é um processo Spring Boot, com banco próprio. Quem publica envia a mensagem depois do commit. Quem consome é o processo cujo listener lê aquela fila. O api-gateway e o MS-Identidade ficam de fora desta tabela: eles não publicam nem consomem essas filas.
+
+Ao final de um despacho estável, cada fila fica com Ready `0`, Unacked `0` e Total `0`. As taxas incoming, deliver e ack em `0.00/s`, ou a célula de taxa em branco, só dizem que nada está passando agora. O trabalho da saga já foi consumido.
 
 A coluna de consumidores deve mostrar `1` em cada fila cujo serviço está no ar. Se o MS-Leitos estiver parado, como na seção 12, `saga.reservar-leito` fica com `0` consumidores. As outras filas de leito (`saga.leito-reservado`, `saga.leito-expirado`, `saga.retentar-busca-leito`) continuam com o consumidor do MS-Ocorrencias. Voltar o processo da porta 8095 devolve o consumidor de `saga.reservar-leito`.
 
-Ready maior que zero, ou Unacked que não cai, é mensagem presa. Em `notificacao.registrar`, isso indica que o MS-Notificacoes não gravou. A consulta `GET /api/notificacoes?ocorrenciaId=...` tem de devolver o alerta correspondente quando essa fila volta a zero.
+Ready maior que zero, ou Unacked que não cai, é mensagem presa. Em `notificacao.registrar`, isso indica que o MS-Notificacoes ainda não gravou.
+
+### Onde estão as notificações
+
+O MS-Notificacoes, processo da porta 8096, grava no MongoDB. O database é `omnileito_notificacoes`, na porta **27018** do host. No DBeaver, a conexão MySQL de `localhost:3310` lista só os quatro schemas `omnileito_identidade`, `omnileito_ocorrencias`, `omnileito_frota` e `omnileito_leitos`.
+
+O driver de MongoDB do DBeaver existe só nas edições pagas. Na Community, a janela *MongoDB driver is not available in Community version* encerra esse caminho: cancele-a. Para uma tela gráfica, use o MongoDB Compass, gratuito, com a URI `mongodb://localhost:27018`, sem usuário e sem senha, e abra o database `omnileito_notificacoes`.
+
+Pelo terminal, o `mongosh` que já está no container:
+
+```bash
+docker exec -it omnileito-mongo mongosh omnileito_notificacoes
+```
+
+O banner mostra `mongodb://127.0.0.1:27017/omnileito_notificacoes`. Essa 27017 é a porta de dentro do container. No host o mapeamento continua `27018 → 27017`. Os avisos de arranque (sistema de arquivos, *Access control is not enabled* e limite de arquivos abertos) são do container local, sem senha. A sessão está pronta quando o prompt fica `omnileito_notificacoes>`.
+
+Dentro do `mongosh`, a coleção `notificacoes` é o alerta. A coleção `auditoria` é a trilha, com o campo extra `origem`.
+
+```javascript
+db.notificacoes.find().pretty()
+db.auditoria.find().pretty()
+```
+
+Para uma ocorrência, troque o id pelo valor devolvido no `POST /api/ocorrencias`:
+
+```javascript
+db.notificacoes.find({ ocorrenciaId: "ID" }).pretty()
+```
+
+`exit` encerra o `mongosh`.
+
+No teste de silêncio da seção 11, a coleção `notificacoes` mostra o ciclo para a mesma `ocorrenciaId`, o leito `L-UTI-01` e a ambulância `ABC-1234`:
+
+1. `DESPACHO`, mensagem `Ocorrência despachada. Ambulância ABC-1234, leito L-UTI-01, Hospital Central.`
+2. cerca de 2 minutos depois, `EXPIRACAO`, mensagem `Reserva do leito L-UTI-01 expirou.`
+3. em seguida outro `DESPACHO`, o mesmo leito reservado de novo
+
+Cada volta acrescenta esse par. O horário em `ocorridaEm` vem em UTC, com sufixo `Z`; no horário de Brasília são 3 horas a menos. O último documento `DESPACHO` deixa o leito reservado outra vez. A fila `notificacao.registrar` em zero combina com esses documentos: a mensagem foi consumida e gravada.
+
+A mesma lista sai pela API, com o gateway no ar:
+
+```bash
+curl -s "$BASE/api/notificacoes?ocorrenciaId=ID" -H "Authorization: Bearer $TOKEN"
+```
+
+`ID` é o id da ocorrência aberta. Com a fila zerada, a resposta traz o alerta correspondente.
+
+## 14. Tela da regulação
+
+Com os seis processos no ar, abra `http://localhost:8085/`. A página é servida pelo gateway. O login e as demais chamadas saem dessa mesma origem. Não há outra porta de interface. O uso de cada cartão está em `docs/manual-da-tela.md`.
+
+Os cartões seguem a ordem da banca: entrar, abrir ocorrência, ocupação, modo do hospital, despachar, segundo despacho, notificações, prazo do aceite, leito extra `L-UTI-03`, trava de falta de leito e circuito. O curl deste roteiro continua chamando as mesmas APIs.
+
+O modo `ACEITE`, `RECUSA`, `SILENCIO` ou aleatório é trocado na tela, com o MS-Leitos no ar. O argumento `--omnileito.reserva.resultado` da seção 1 continua sendo o valor inicial da subida. Vazio segue sorteando.
+
+`L-UTI-03` só existe enquanto o cartão de outro leito estiver em uso. Apague esse código quando ele voltar a `LIVRE`. A trava de falta de leito vale uma busca, nasce desligada a cada subida e só altera a tentativa seguinte a 1.
+
+No circuito, pare só a porta 8095 com Ctrl+C. A consulta de UTI na tela responde `503`. A abertura ao lado responde `201`.

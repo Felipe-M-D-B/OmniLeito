@@ -30,25 +30,83 @@ public class LeitoService {
 
 	private static final ZoneId ZONA = ZoneId.of("America/Sao_Paulo");
 	private static final Set<String> TIPOS = Set.of("UTI", "EMERGENCIA", "ENFERMARIA");
+	private static final Set<String> CODIGOS_DA_CARGA = Set.of(
+			"L-UTI-01", "L-UTI-02", "L-EMG-01", "L-EMG-02", "L-ENF-01", "L-ENF-02");
 
 	private final LeitoRepository leitos;
 	private final ReservaRecusadaRepository recusas;
+	private final UnidadeSaudeRepository unidades;
 	private final CacheLeitos cache;
 	private final SorteioUnidade sorteio;
 	private final Publicador publicador;
 	private final long expiracaoMinutos;
 	private final JsonMapper json = JsonMapper.builder().build();
 	private final ConcurrentHashMap<String, Long> ambulanciaPorOcorrencia = new ConcurrentHashMap<>();
+	private final Set<String> proximaBuscaSemVaga = ConcurrentHashMap.newKeySet();
 
-	public LeitoService(LeitoRepository leitos, ReservaRecusadaRepository recusas, CacheLeitos cache,
-			SorteioUnidade sorteio, Publicador publicador,
+	public LeitoService(LeitoRepository leitos, ReservaRecusadaRepository recusas, UnidadeSaudeRepository unidades,
+			CacheLeitos cache, SorteioUnidade sorteio, Publicador publicador,
 			@Value("${omnileito.reserva.expiracao-minutos:2}") long expiracaoMinutos) {
 		this.leitos = leitos;
 		this.recusas = recusas;
+		this.unidades = unidades;
 		this.cache = cache;
 		this.sorteio = sorteio;
 		this.publicador = publicador;
 		this.expiracaoMinutos = expiracaoMinutos;
+	}
+
+	public String definirResultado(String resultado) {
+		return sorteio.definir(resultado);
+	}
+
+	public String resultadoAtual() {
+		return sorteio.modo();
+	}
+
+	@Transactional
+	public LeitoResponse criarExtra(String tipoLeito, String codigo, String unidadeNome) {
+		exigirTipo(tipoLeito);
+		String codigoLimpo = codigo == null ? "" : codigo.trim();
+		if (codigoLimpo.isBlank() || codigoLimpo.length() > 40 || unidadeNome == null || unidadeNome.isBlank()) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "CAMPO_INVALIDO", "Campo ausente ou valor fora da lista fechada.");
+		}
+		if (CODIGOS_DA_CARGA.contains(codigoLimpo)) {
+			throw new ApiException(HttpStatus.CONFLICT, "LEITO_DA_CARGA", "O leito da carga não é criado pela demonstração.");
+		}
+		if (leitos.findByCodigo(codigoLimpo).isPresent()) {
+			throw new ApiException(HttpStatus.CONFLICT, "LEITO_JA_EXISTE", "Já existe leito com esse código.");
+		}
+		UnidadeSaude unidade = unidades.findByNome(unidadeNome.trim())
+				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "UNIDADE_NAO_ENCONTRADA", "Unidade não encontrada."));
+		Leito salvo = leitos.save(new Leito(unidade, codigoLimpo, tipoLeito, StatusLeito.LIVRE));
+		cache.apagar(tipoLeito);
+		return LeitoResponse.de(salvo);
+	}
+
+	@Transactional
+	public void removerExtra(String codigo) {
+		if (codigo == null || CODIGOS_DA_CARGA.contains(codigo)) {
+			throw new ApiException(HttpStatus.CONFLICT, "LEITO_DA_CARGA", "O leito da carga não é removido pela demonstração.");
+		}
+		Leito leito = leitos.findByCodigo(codigo)
+				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "LEITO_NAO_ENCONTRADO", "Leito não encontrado."));
+		if (leito.getStatus() != StatusLeito.LIVRE) {
+			throw new ApiException(HttpStatus.CONFLICT, "LEITO_NAO_LIVRE", "Só um leito livre da demonstração pode ser removido.");
+		}
+		leitos.delete(leito);
+		cache.apagar(leito.getTipoLeito());
+	}
+
+	public void armarProximaBuscaSemVaga(String tipoLeito) {
+		exigirTipo(tipoLeito);
+		proximaBuscaSemVaga.add(tipoLeito);
+	}
+
+	private void exigirTipo(String tipoLeito) {
+		if (tipoLeito == null || !TIPOS.contains(tipoLeito)) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "CAMPO_INVALIDO", "Campo ausente ou valor fora da lista fechada.");
+		}
 	}
 
 	public List<LeitoResponse> disponiveis(String tipoLeito) {
@@ -76,6 +134,12 @@ public class LeitoService {
 		Leito ativo = leitos.findByOcorrenciaId(pedido.ocorrenciaId()).orElse(null);
 		if (ativo != null && ativo.getStatus() == StatusLeito.RESERVADO) {
 			publicar(eventoDaReservaAtual(pedido, ativo));
+			return;
+		}
+		if (pedido.tentativa() > 1 && proximaBuscaSemVaga.remove(pedido.tipoLeito())) {
+			cache.apagar(pedido.tipoLeito());
+			publicar(new LeitoReservado(pedido.ocorrenciaId(), pedido.ambulanciaId(), pedido.tentativa(), false, null,
+					null, pedido.tipoLeito(), null, null, null, "SEM_LEITO_COMPATIVEL"));
 			return;
 		}
 		Set<Long> porUltimo = new LinkedHashSet<>();
