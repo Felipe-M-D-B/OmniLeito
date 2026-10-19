@@ -14,7 +14,7 @@ public class NotificacaoListener {
 		this.notificacoes = notificacoes;
 	}
 
-	@RabbitListener(queues = Filas.REGISTRAR_NOTIFICACAO)
+	@RabbitListener(id = Filas.REGISTRAR_NOTIFICACAO, queues = Filas.REGISTRAR_NOTIFICACAO)
 	public void registrar(RegistrarNotificacao pedido) {
 		String origem = "EXPIRACAO".equals(pedido.tipo()) ? "MS-Leitos" : "MS-Ocorrencias";
 		notificacoes.registrar(pedido, origem);

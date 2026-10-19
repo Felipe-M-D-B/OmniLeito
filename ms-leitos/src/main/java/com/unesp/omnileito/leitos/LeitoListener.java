@@ -14,7 +14,7 @@ public class LeitoListener {
 		this.leitos = leitos;
 	}
 
-	@RabbitListener(queues = Filas.RESERVAR_LEITO)
+	@RabbitListener(id = Filas.RESERVAR_LEITO, queues = Filas.RESERVAR_LEITO)
 	public void reservar(ReservarLeito pedido) {
 		leitos.reservar(pedido);
 	}

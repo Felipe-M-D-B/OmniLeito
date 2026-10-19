@@ -14,19 +14,22 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FrotaServiceTest {
 
 	private AmbulanciaRepository ambulancias;
+	private CacheOcupacao cache;
 	private Gravador publicador;
 	private FrotaService servico;
 
 	@BeforeEach
 	void preparar() {
 		ambulancias = mock(AmbulanciaRepository.class);
+		cache = mock(CacheOcupacao.class);
 		publicador = new Gravador();
-		servico = new FrotaService(ambulancias, mock(CacheOcupacao.class), publicador);
+		servico = new FrotaService(ambulancias, cache, publicador);
 	}
 
 	@Test
@@ -55,6 +58,20 @@ class FrotaServiceTest {
 
 		assertEquals(StatusAmbulancia.DISPONIVEL, ambulancia.getStatus());
 		assertNull(ambulancia.getOcorrenciaId());
+	}
+
+	@Test
+	void reinicioDevolveAmbulanciasDisponiveis() {
+		Ambulancia ambulancia = new Ambulancia();
+		ambulancia.setStatus(StatusAmbulancia.DESPACHADA);
+		ambulancia.setOcorrenciaId("oc-1");
+		when(ambulancias.findAll()).thenReturn(List.of(ambulancia));
+
+		servico.reiniciarCarga();
+
+		assertEquals(StatusAmbulancia.DISPONIVEL, ambulancia.getStatus());
+		assertNull(ambulancia.getOcorrenciaId());
+		verify(cache).apagar(CacheOcupacao.FROTA);
 	}
 
 	private static final class Gravador implements Publicador {

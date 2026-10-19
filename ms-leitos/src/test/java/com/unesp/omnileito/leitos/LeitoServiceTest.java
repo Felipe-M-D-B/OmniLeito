@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -41,7 +42,7 @@ class LeitoServiceTest {
 		sorteio = mock(SorteioUnidade.class);
 		publicador = new Gravador();
 		cache = mock(CacheLeitos.class);
-		servico = new LeitoService(leitos, recusas, unidades, cache, sorteio, publicador, 2);
+		servico = new LeitoService(leitos, recusas, unidades, cache, sorteio, publicador, new VarreduraLeitos(), 2);
 		when(leitos.findByOcorrenciaId("oc-1")).thenReturn(Optional.empty());
 		when(recusas.findByOcorrenciaId("oc-1")).thenReturn(List.of());
 	}
@@ -96,7 +97,7 @@ class LeitoServiceTest {
 	@Test
 	void trocaDeResultadoValeParaAReservaSeguinte() {
 		SorteioUnidade real = new SorteioUnidade("ACEITE");
-		LeitoService comReal = new LeitoService(leitos, recusas, unidades, cache, real, publicador, 2);
+		LeitoService comReal = new LeitoService(leitos, recusas, unidades, cache, real, publicador, new VarreduraLeitos(), 2);
 		Leito unico = leito(10L, "L-UTI-01");
 		when(leitos.findByStatusAndTipoLeitoAndIdNotInOrderById(any(), any(), any())).thenReturn(List.of());
 		when(leitos.findByStatusAndTipoLeitoOrderById(StatusLeito.LIVRE, "UTI")).thenReturn(List.of(unico));
@@ -173,6 +174,55 @@ class LeitoServiceTest {
 
 		LeitoReservado terceira = (LeitoReservado) publicador.saga.get(2);
 		assertTrue(terceira.sucesso());
+	}
+
+	@Test
+	void reinicioVoltaACargaESoltaATrava() {
+		Leito livre = leito(1L, "L-UTI-01");
+		livre.setStatus(StatusLeito.RESERVADO);
+		livre.setOcorrenciaId("oc-1");
+		livre.setConfirmado(true);
+		Leito ocupado = new Leito(2L, hospital, "L-UTI-02", "UTI", StatusLeito.LIVRE);
+		Leito extra = leito(30L, "L-UTI-03");
+		when(leitos.findAll()).thenReturn(List.of(livre, ocupado, extra));
+		when(sorteio.definir("")).thenReturn("");
+		servico.armarProximaBuscaSemVaga("UTI");
+
+		servico.reiniciarCarga();
+
+		assertEquals(StatusLeito.LIVRE, livre.getStatus());
+		assertNull(livre.getOcorrenciaId());
+		assertEquals(false, livre.isConfirmado());
+		assertEquals(StatusLeito.OCUPADO, ocupado.getStatus());
+		verify(leitos).delete(extra);
+		verify(recusas).deleteAllInBatch();
+		verify(sorteio).definir("");
+		verify(cache).apagar("UTI");
+		verify(cache).apagar("EMERGENCIA");
+		verify(cache).apagar("ENFERMARIA");
+
+		when(leitos.findByOcorrenciaId("oc-9")).thenReturn(Optional.empty());
+		when(recusas.findByOcorrenciaId("oc-9")).thenReturn(List.of());
+		when(leitos.findByStatusAndTipoLeitoAndIdNotInOrderById(any(), any(), any())).thenReturn(List.of());
+		when(leitos.findByStatusAndTipoLeitoOrderById(StatusLeito.LIVRE, "UTI")).thenReturn(List.of(livre));
+		when(leitos.reservarSeLivre(eq(1L), any(), any())).thenReturn(1);
+		when(leitos.findById(1L)).thenReturn(Optional.of(livre));
+		when(sorteio.sortear()).thenReturn(ResultadoUnidade.ACEITE);
+		servico.reservar(new ReservarLeito("oc-9", 1L, "UTI", List.of(), 2));
+
+		LeitoReservado evento = (LeitoReservado) publicador.saga.get(0);
+		assertTrue(evento.sucesso());
+	}
+
+	@Test
+	void varreduraPausadaNaoPublicaRetentativa() {
+		VarreduraLeitos varredura = new VarreduraLeitos();
+		varredura.pausar();
+		LeitoService pausado = new LeitoService(leitos, recusas, unidades, cache, sorteio, publicador, varredura, 2);
+
+		pausado.expirarReservas();
+
+		assertTrue(publicador.saga.isEmpty());
 	}
 
 	private Leito leito(Long id, String codigo) {

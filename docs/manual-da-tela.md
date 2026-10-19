@@ -1,6 +1,6 @@
 # Manual da tela de regulação — OmniLeito
 
-- Data: 16/10/2026
+- Data: 19/10/2026
 - Página: `http://localhost:8085/`
 - Complementa `docs/roteiro-de-testes.md`. O curl daquele roteiro continua válido: a tela chama as mesmas APIs.
 
@@ -19,13 +19,13 @@ Os quatro containers do `docker compose` e os seis processos:
 | MS-Leitos | 8095 |
 | MS-Notificacoes | 8096 |
 
-A carga inicial tem duas ambulâncias `DISPONIVEL` (`ABC-1234` e `XYZ-5678`) e, em cada especialidade, um leito `LIVRE` e um `OCUPADO`. Se uma passagem anterior gastou UTI ou ambulância, volte à carga pela seção 2 do roteiro antes de repetir o cenário.
+A carga inicial tem duas ambulâncias `DISPONIVEL` (`ABC-1234` e `XYZ-5678`) e, em cada especialidade, um leito `LIVRE` e um `OCUPADO`. Se uma passagem anterior gastou UTI ou ambulância, use o cartão **Estado inicial**. O `DROP DATABASE` da seção 2 do roteiro continua valendo quando o schema precisa nascer de novo.
 
 Abra `http://localhost:8085/` e atualize a página se o navegador mostrar a versão antiga.
 
 ## 2. Como a página funciona
 
-No alto, **OmniLeito / Regulação**. À direita, o estado da sessão.
+No alto, **OmniLeito / Painel de Controle**. À direita, o estado da sessão.
 
 Sem login, o texto é `Sem token. Entre para chamar a regulação.` Depois do `200`, passa a `Token guardado nesta aba.` O token fica em `sessionStorage` e vale só nessa aba. Fechar a aba pede um novo login. As chamadas seguintes enviam `Authorization: Bearer`.
 
@@ -49,7 +49,7 @@ O campo **Ocorrência**, no cartão Despachar, recebe o UUID da última abertura
 4. Abrir a ocorrência.
 5. Despachar e ler o acompanhamento.
 6. Consultar notificações.
-7. Seguir o cenário: segundo despacho, prazo, outro leito, falta de leito ou circuito.
+7. Seguir o cenário: segundo despacho, prazo, outro leito, falta de leito, circuito ou o teste das filas da seção 5.
 
 O modo do hospital vale para a próxima reserva e permanece até outro clique ou até o MS-Leitos subir de novo. Na subida, o argumento `--omnileito.reserva.resultado` é o valor inicial. Sem argumento, o modo começa aleatório.
 
@@ -222,7 +222,142 @@ Pare só o processo da porta 8095 com Ctrl+C. Ctrl+Z suspende e a porta continua
 2. **Abrir ocorrência agora**, no mesmo momento. Esperado: HTTP `201`. O paciente gravado é `Teste Circuito`, local `Rua do Circuito, 1`, prioridade `VERDE`, tipo `ENFERMARIA`. O UUID também entra no campo Ocorrência.
 3. Suba o MS-Leitos de novo. Depois da janela de 10 segundos do circuito aberto, **Consultar UTI** volta a `200`.
 
-## 5. Cenários pela tela
+### Estado inicial
+
+Devolve a carga sem parar os processos e sem apagar o usuário `regulador`. Use com a saga já parada. O `DROP DATABASE` da seção 2 do roteiro continua sendo o retorno quando o schema precisa nascer de novo.
+
+| Peça | Papel |
+| --- | --- |
+| API | `POST /api/ocorrencias/demonstracao/reinicio`, `POST /api/ambulancias/demonstracao/reinicio`, `POST /api/leitos/demonstracao/reinicio` e `POST /api/notificacoes/demonstracao/reinicio` |
+| Gera | MS-Ocorrencias apaga ocorrências e esvazia as oito filas. MS-Frota devolve `ABC-1234` e `XYZ-5678` a `DISPONIVEL` e apaga o cache. MS-Leitos restaura os seis leitos, remove extra como `L-UTI-03`, solta a trava e volta o modo a aleatório. MS-Notificacoes esvazia `notificacoes` e `auditoria` |
+| Consome | API Gateway encaminha as quatro chamadas. A de leitos passa pelo circuito |
+
+**Reiniciar no estado inicial** espera `HTTP 204` em cada chamada. A tela repete a de ocorrências no fim, para esvaziar fila que tenha chegado no meio. Em seguida limpa o UUID e as respostas dos outros cartões. O token da aba permanece.
+
+Se o MS-Leitos estiver parado, a chamada de leitos responde `503` e a carga de leitos não volta. As outras seguem.
+
+O Estado inicial também religa os listeners depois de esvaziar as filas. Um acúmulo interrompido não deixa a regulação surda.
+
+### Filas
+
+Dois ensaios no mesmo cartão. O painel do RabbitMQ fica em `http://localhost:15672`, `guest` / `guest`, aba Queues. Atualize essa aba durante o ensaio.
+
+| Peça | Papel |
+| --- | --- |
+| API | `POST /api/ocorrencias/demonstracao/rajada`, `POST /api/ocorrencias/demonstracao/filas/acumulo`, `POST /api/ocorrencias/demonstracao/filas/esvaziar` e as pausas e retomadas de ocorrências, frota, leitos e notificações |
+| Gera | A rajada abre e despacha pela saga. O acúmulo publica a quantidade pedida em cada uma das oito filas |
+| Consome | Na rajada, os listeners de sempre. No acúmulo, ninguém consome até **Esvaziar e religar** |
+
+**Rajada**, padrão 20 e teto 100. Abre ocorrências `Carga Fila` em enfermaria e despacha, com 200 ms entre uma e outra. As taxas incoming e deliver/get sobem. No fim as filas voltam a zero e a carga fica gasta. Use **Estado inicial** em seguida.
+
+**Pausar e acumular**, padrão 40 e teto 200. Pausa os quatro consumidores sem derrubar a porta. Se as quatro pausas forem `204`, publica. O refresh do RabbitMQ mostra Ready igual à quantidade nas oito filas, e esse número permanece. A varredura de leitos, que publicaria uma retentativa a cada 15 segundos, também fica parada nessa pausa. Se uma pausa falhar, o acúmulo não começa e quem já tinha pausado é religado.
+
+**Esvaziar e religar** apaga as oito filas e só então religa os consumidores. As mensagens de `inspecao-fila` não entram na saga.
+
+Quantidade fora da faixa: HTTP `400`, `CAMPO_INVALIDO`.
+
+O passo a passo, a leitura das colunas do RabbitMQ e o que fazer quando o número foge do esperado estão na seção 5. O plano de onde saiu esse ensaio é a seção 9 de `docs/plano-carga-das-filas.md`.
+
+## 5. Teste das filas no RabbitMQ
+
+O cartão **Filas** fica depois de Estado inicial. O login é `regulador` / `regulador`. O RabbitMQ Management fica em outra aba: `http://localhost:15672`, `guest` / `guest`, **Queues and Streams**. O painel não abre essa aba. Quem testa atualiza a tabela no momento certo.
+
+A coluna State `running` significa que a fila existe. Ela permanece `running` com o listener pausado. O sinal de pausa é Ready parado e deliver/get em `0.00/s`.
+
+Há dois ensaios. A rajada prova a saga. O acúmulo prova a foto de fila cheia. Um não substitui o outro. Faça o acúmulo primeiro: ele não gasta ambulância nem leito.
+
+### O que a rajada faz
+
+**Rajada** pede uma quantidade, padrão 20, teto 100. Para cada unidade, o MS-Ocorrencias abre uma ocorrência e chama o despacho que a regulação já usa.
+
+| Campo da ocorrência | Valor |
+| --- | --- |
+| Paciente | `Carga Fila 1`, `Carga Fila 2`, e assim por diante |
+| Local | `Rua da Fila` |
+| Prioridade | `VERDE` |
+| Tipo de leito | `ENFERMARIA` |
+
+Entre um despacho e o seguinte há 200 ms. A resposta do cartão fecha só no fim: HTTP `200` e `{"quantidade": 20}`. Esse `200` diz que as aberturas e os despachos foram pedidos. O estado final de cada ocorrência aparece na ocupação e no MySQL, não nesse JSON.
+
+Os listeners ficam ligados. Cada mensagem entra e sai. Ready, Unacked e Total ficam em `0` no fim. A prova é a coluna **Message rates**:
+
+| Coluna | O que significa na rajada |
+| --- | --- |
+| incoming | Alguém publicou naquela fila na janela recente |
+| deliver / get | Um consumidor recebeu mensagem na janela recente |
+| ack | O consumidor confirmou a mensagem |
+| Ready | Mensagem ainda esperando. No fim da rajada, o valor esperado é `0` |
+
+A taxa do management é uma média da janela recente. Um pico de vinte mensagens em poucos segundos continua aparecendo, por exemplo como `0.40/s`, depois que Ready já voltou a zero. Mais um refresh, com o sistema quieto, devolve `0.00/s`.
+
+A semente tem duas ambulâncias e um leito livre de enfermaria. As primeiras ocorrências percorrem alocação, reserva e notificação. As seguintes encontram a frota esgotada, passam por `saga.alocar-ambulancia` e `saga.ambulancia-alocada` e terminam em `FALHA_DESPACHO`. Esse fim é o teste da frota esgotada.
+
+`saga.leito-expirado` só recebe mensagem quando uma reserva sem confirmação completa dois minutos. Uma rajada que acabou de terminar deixa essa taxa em `0.00/s`. `notificacao.registrar` sobe nas ocorrências que publicaram despacho; se o refresh vier depois da janela, a taxa já voltou a `0.00/s` e o documento está no Mongo.
+
+`saga.retentar-busca-leito` continua se movendo com o MS-Leitos no ar. A cada 15 segundos a varredura publica uma retentativa para cada especialidade que ainda tem leito livre, e o MS-Ocorrencias consome. Ready segue em `0`. Essa fila é a única que pode mostrar deliver/get e ack acima de zero com o painel já em HTTP `200`.
+
+### O que o acúmulo faz
+
+**Pausar e acumular** pede uma quantidade, padrão 40, teto 200. A ordem é fixa:
+
+1. Pausa o listener do MS-Ocorrencias (`saga.ambulancia-alocada`, `saga.leito-reservado`, `saga.leito-expirado`, `saga.retentar-busca-leito`).
+2. Pausa o listener do MS-Frota (`saga.alocar-ambulancia`, `saga.atualizar-ambulancia`).
+3. Pausa o listener do MS-Leitos (`saga.reservar-leito`) e a varredura de 15 segundos.
+4. Pausa o listener do MS-Notificacoes (`notificacao.registrar`).
+5. Só com as quatro respostas em `204`, publica a quantidade em cada uma das oito filas.
+
+O processo Java de cada porta continua no ar. A pausa da porta 8095 não abre o circuito. Se uma pausa não for `204`, o acúmulo não publica e o cartão religa quem já tinha pausado. A área de resposta termina com `Acúmulo não começou.`
+
+Cada mensagem usa o formato que o listener daquela fila já conhece. O `ocorrenciaId` é `inspecao-fila`, que não é ocorrência aberta. A publicação existe para o broker contar. Ela não deve ser entregue.
+
+Com os listeners parados, o refresh mostra nas oito linhas Ready igual à quantidade, Unacked `0` e Total igual à quantidade. incoming sobe na publicação e depois volta a `0.00/s`, com Ready parado. A varredura também fica parada: sem isso, `saga.retentar-busca-leito` ganharia mensagem nova a cada 15 segundos e a foto deixaria de bater com a quantidade.
+
+**Esvaziar e religar** apaga as oito filas e só então religa os quatro listeners e a varredura. As mensagens de `inspecao-fila` não entram na saga. Ambulância e leito permanecem como estavam.
+
+### Preparar
+
+1. Confira as seis portas. Entre no painel com `regulador` / `regulador`.
+2. Abra `http://localhost:15672` na aba Queues.
+3. No painel, **Reiniciar no estado inicial**. Esperado: cinco linhas `HTTP 204` e o texto de carga restaurada.
+4. Atualize o RabbitMQ. As oito filas em Ready `0`. `saga.retentar-busca-leito` pode mostrar uma taxa baixa: é a varredura, com Ready ainda em `0`.
+
+### Passo a passo do acúmulo
+
+1. Deixe a quantidade do acúmulo em `40`. Clique **Pausar e acumular**.
+2. Esperado no cartão, nesta ordem: `Ocorrências pausa: HTTP 204`, `Frota pausa: HTTP 204`, `Leitos pausa: HTTP 204`, `Notificações pausa: HTTP 204`, `Acúmulo: HTTP 204`.
+3. Atualize o RabbitMQ. As oito filas com Ready `40`, Unacked `0`, Total `40`. State continua `running`.
+4. Espere mais de 15 segundos e atualize de novo. Ready continua `40` nas oito, inclusive em `saga.retentar-busca-leito`. incoming volta a `0.00/s`.
+5. No painel, ocupação: `ABC-1234` e `XYZ-5678` seguem `DISPONIVEL`. O acúmulo não alocou ambulância.
+6. Clique **Esvaziar e religar**. Esperado: `Esvaziar: HTTP 204`, as quatro retomadas em `204` e o texto de consumidores religados.
+7. Atualize o RabbitMQ. As oito filas em zero.
+8. Abra uma ocorrência qualquer e despache. A saga percorre de novo. A pausa não ficou presa. Em seguida, **Estado inicial**, para a rajada achar a semente limpa.
+
+### Passo a passo da rajada
+
+1. Carga limpa, pelo Estado inicial do passo anterior.
+2. Deixe a quantidade da rajada em `20`. Deixe a aba do RabbitMQ visível. Clique **Rajada**.
+3. Enquanto o botão estiver desabilitado e o cartão disser que a rajada está em andamento, atualize Queues duas ou três vezes.
+4. Durante esses refreshes, incoming, e em seguida deliver/get e ack, passam de `0.00/s` em `saga.alocar-ambulancia` e `saga.ambulancia-alocada`. `saga.reservar-leito`, `saga.leito-reservado`, `saga.atualizar-ambulancia` e `notificacao.registrar` sobem enquanto ainda houver ambulância e leito. Ready pode piscar acima de zero. O número parado não é a prova deste ensaio.
+5. O cartão fecha com HTTP `200` e `{"quantidade": 20}`.
+6. Atualize o RabbitMQ de novo. Ready, Unacked e Total em `0`. A média ainda pode mostrar `0.40/s` em incoming nas filas que a saga tocou. `saga.retentar-busca-leito` pode manter deliver/get e ack acima de zero. `saga.leito-expirado` fica em `0.00/s`.
+7. Ocupação: as duas ambulâncias saíram de `DISPONIVEL`. O leito livre de enfermaria foi usado. Parte das ocorrências `Carga Fila` fica `DESPACHADA` e o restante `FALHA_DESPACHO`.
+8. **Reiniciar no estado inicial**. Cinco `HTTP 204`. Ocupação de novo com as duas ambulâncias e um livre por especialidade. Mais um refresh no RabbitMQ: Ready em `0` e as taxas a caminho de `0.00/s`.
+
+Uma rajada já terminada, com HTTP `200` e Ready em zero, ainda pode mostrar `0.40/s`. Essa taxa é a média do pico que já passou. Para ver a taxa subir ao vivo, o refresh tem que acontecer com o botão **Rajada** ainda desabilitado. A foto de Ready `40` é **Pausar e acumular**.
+
+### Quando o resultado foge do esperado
+
+| O que aparece | O que fazer |
+| --- | --- |
+| Alguma pausa em HTTP `504` e o texto `Acúmulo não começou.` | O acúmulo não publicou. Quem chegou a pausar foi religado. Repita **Pausar e acumular** com os seis processos no ar |
+| Acúmulo em `204`, mas Ready volta a zero na hora | O listener daquela fila ainda consumiu. Confira se a pausa daquele serviço foi `204` antes da publicação |
+| Ready sobe sozinho em `saga.retentar-busca-leito` durante a pausa | A varredura de leitos ainda está publicando. A pausa do MS-Leitos precisa ser a que também segura essa varredura. **Esvaziar e religar** e repetir o acúmulo |
+| Rajada em HTTP `400` | A quantidade está fora de 1 a 100 |
+| Acúmulo em HTTP `400` | A quantidade está fora de 1 a 200 |
+| Leitos pausa em HTTP `503` | O processo da porta 8095 está parado. Suba o MS-Leitos. O circuito de consulta continua no limite de 2 segundos; a rajada e a pausa usam o tempo maior do gateway |
+| Depois da rajada a ocupação mostra a frota gasta | Esperado. **Estado inicial** restaura |
+
+## 6. Cenários pela tela
 
 Comece cada bloco com carga limpa, exceto quando o passo disser para continuar na mesma carga. Entre antes do primeiro cartão.
 
@@ -283,7 +418,7 @@ A tentativa 1 reserva. A seguinte não acha vaga: a ambulância permanece fora d
 
 Gateway no ar. Ctrl+C só na porta 8095. Duas consultas de UTI em `503` e uma abertura em `201`. Suba o MS-Leitos. A consulta volta a `200`.
 
-## 6. O que conferir fora da tela
+## 7. O que conferir fora da tela
 
 A tela não mostra fila, chave do Redis nem a coluna `confirmado`.
 
@@ -296,7 +431,7 @@ A tela não mostra fila, chave do Redis nem a coluna `confirmado`.
 
 O painel do RabbitMQ e o Mongo estão detalhados na seção 13 do roteiro.
 
-## 7. O que a tela não faz
+## 8. O que a tela não faz
 
 - Não encerra processo Java nem container. O circuito pede Ctrl+C no terminal da porta 8095.
 - Não muda `EM_TRANSPORTE`, `CONCLUIDA`, `CANCELADA`, `EM_ATENDIMENTO` nem `INDISPONIVEL`.

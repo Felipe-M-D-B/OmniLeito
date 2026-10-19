@@ -1,6 +1,7 @@
 const estado = {
   token: sessionStorage.getItem("omnileitoToken") || "",
-  prazo: null
+  prazo: null,
+  versao: 0
 };
 
 const sessao = document.querySelector("#sessao");
@@ -120,9 +121,16 @@ function texto(resposta) {
 }
 
 async function acompanhar(id, destino, cabecalho) {
+  const versao = estado.versao;
   const inicio = Date.now();
   while (Date.now() - inicio <= 15000) {
+    if (versao !== estado.versao) {
+      return;
+    }
     const ultimo = await api("GET", "/api/ocorrencias/" + encodeURIComponent(id));
+    if (versao !== estado.versao) {
+      return;
+    }
     destino.textContent = cabecalho + "\n\nAcompanhamento:\n" + texto(ultimo);
     await new Promise((resolver) => setTimeout(resolver, 2000));
   }
@@ -174,9 +182,15 @@ document.querySelector("#btn-prazo").addEventListener("click", () => {
   if (estado.prazo) {
     clearInterval(estado.prazo);
   }
+  const versao = estado.versao;
   const fim = Date.now() + 120000;
   const relogio = document.querySelector("#relogio");
   estado.prazo = setInterval(async () => {
+    if (versao !== estado.versao) {
+      clearInterval(estado.prazo);
+      estado.prazo = null;
+      return;
+    }
     const resta = fim - Date.now();
     if (resta > 0) {
       const segundos = Math.ceil(resta / 1000);
@@ -218,6 +232,54 @@ document.querySelector("#btn-trava").addEventListener("click", async () => {
   }));
 });
 
+function limparRespostas() {
+  estado.versao += 1;
+  if (estado.prazo) {
+    clearInterval(estado.prazo);
+    estado.prazo = null;
+  }
+  ocorrenciaId.value = "";
+  document.querySelector("#relogio").textContent = "Marcador parado.";
+  document.querySelector("#modo-atual").textContent = "Modo atual: aleatório";
+  document.querySelectorAll("pre.saida").forEach((saida) => {
+    if (saida.id !== "saida-reinicio") {
+      saida.textContent = "";
+    }
+  });
+}
+
+document.querySelector("#btn-reinicio").addEventListener("click", async () => {
+  const destino = document.querySelector("#saida-reinicio");
+  const botao = document.querySelector("#btn-reinicio");
+  botao.disabled = true;
+  destino.textContent = "Reiniciando a carga...";
+  const chamadas = [
+    ["Ocorrências e filas", "/api/ocorrencias/demonstracao/reinicio"],
+    ["Frota", "/api/ambulancias/demonstracao/reinicio"],
+    ["Leitos", "/api/leitos/demonstracao/reinicio"],
+    ["Notificações", "/api/notificacoes/demonstracao/reinicio"],
+    ["Filas outra vez", "/api/ocorrencias/demonstracao/reinicio"]
+  ];
+  const linhas = [];
+  let ok = true;
+  for (const [nome, caminho] of chamadas) {
+    const resposta = await api("POST", caminho);
+    linhas.push(nome + ": HTTP " + resposta.status);
+    if (resposta.status < 200 || resposta.status >= 300) {
+      ok = false;
+      if (resposta.corpo && resposta.corpo.mensagem) {
+        linhas.push(resposta.corpo.mensagem);
+      }
+    }
+  }
+  if (ok) {
+    limparRespostas();
+    linhas.push("Carga inicial restaurada. Duas ambulâncias DISPONIVEL, um leito LIVRE por especialidade, modo aleatório.");
+  }
+  destino.textContent = linhas.join("\n");
+  botao.disabled = false;
+});
+
 document.querySelector("#btn-circuito").addEventListener("click", async () => {
   mostrar(document.querySelector("#saida-circuito"), await api("GET", "/api/leitos/disponiveis?tipoLeito=UTI"));
 });
@@ -233,6 +295,81 @@ document.querySelector("#btn-abertura-circuito").addEventListener("click", async
     ocorrenciaId.value = resposta.corpo.id;
   }
   mostrar(document.querySelector("#saida-circuito"), resposta);
+});
+
+const pausasDeFila = [
+  ["Ocorrências", "/api/ocorrencias/demonstracao/filas/pausa", "/api/ocorrencias/demonstracao/filas/retomada"],
+  ["Frota", "/api/ambulancias/demonstracao/filas/pausa", "/api/ambulancias/demonstracao/filas/retomada"],
+  ["Leitos", "/api/leitos/demonstracao/filas/pausa", "/api/leitos/demonstracao/filas/retomada"],
+  ["Notificações", "/api/notificacoes/demonstracao/filas/pausa", "/api/notificacoes/demonstracao/filas/retomada"]
+];
+
+function quantidadeDo(campo, padrao) {
+  const valor = Number(document.querySelector(campo).value);
+  return Number.isInteger(valor) ? valor : padrao;
+}
+
+document.querySelector("#btn-rajada").addEventListener("click", async () => {
+  const destino = document.querySelector("#saida-filas");
+  const botao = document.querySelector("#btn-rajada");
+  botao.disabled = true;
+  destino.textContent = "Rajada em andamento. Atualize o RabbitMQ para ver as taxas.";
+  const resposta = await api("POST", "/api/ocorrencias/demonstracao/rajada", {
+    quantidade: quantidadeDo("#qtd-rajada", 20)
+  });
+  mostrar(destino, resposta);
+  botao.disabled = false;
+});
+
+document.querySelector("#btn-acumular").addEventListener("click", async () => {
+  const destino = document.querySelector("#saida-filas");
+  const botao = document.querySelector("#btn-acumular");
+  botao.disabled = true;
+  destino.textContent = "Pausando os consumidores...";
+  const linhas = [];
+  const pausados = [];
+  for (const [nome, pausa] of pausasDeFila) {
+    const resposta = await api("POST", pausa);
+    linhas.push(nome + " pausa: HTTP " + resposta.status);
+    if (resposta.status >= 200 && resposta.status < 300) {
+      pausados.push(nome);
+    }
+  }
+  if (pausados.length !== pausasDeFila.length) {
+    for (const [nome, , retomada] of pausasDeFila) {
+      if (pausados.includes(nome)) {
+        const resposta = await api("POST", retomada);
+        linhas.push(nome + " retomada: HTTP " + resposta.status);
+      }
+    }
+    linhas.push("Acúmulo não começou.");
+    destino.textContent = linhas.join("\n");
+    botao.disabled = false;
+    return;
+  }
+  const resposta = await api("POST", "/api/ocorrencias/demonstracao/filas/acumulo", {
+    quantidade: quantidadeDo("#qtd-acumulo", 40)
+  });
+  linhas.push("Acúmulo: HTTP " + resposta.status);
+  linhas.push("Atualize http://localhost:15672. Ready deve ficar parado na quantidade pedida.");
+  destino.textContent = linhas.join("\n");
+  botao.disabled = false;
+});
+
+document.querySelector("#btn-esvaziar-filas").addEventListener("click", async () => {
+  const destino = document.querySelector("#saida-filas");
+  const botao = document.querySelector("#btn-esvaziar-filas");
+  botao.disabled = true;
+  const linhas = [];
+  const esvaziar = await api("POST", "/api/ocorrencias/demonstracao/filas/esvaziar");
+  linhas.push("Esvaziar: HTTP " + esvaziar.status);
+  for (const [nome, , retomada] of pausasDeFila) {
+    const resposta = await api("POST", retomada);
+    linhas.push(nome + " retomada: HTTP " + resposta.status);
+  }
+  linhas.push("Filas esvaziadas e consumidores religados.");
+  destino.textContent = linhas.join("\n");
+  botao.disabled = false;
 });
 
 atualizarSessao();

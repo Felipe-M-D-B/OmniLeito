@@ -47,6 +47,7 @@ main {
 }
 
 .cartao {
+  min-width: 0;
   background: var(--cartao);
   border: 1px solid var(--linha);
   border-radius: 8px;
@@ -68,7 +69,7 @@ h2 { margin: 0.2rem 0 0.8rem; font-size: 1.2rem; }
 .resumo {
   margin: 0 0 0.85rem;
   display: grid;
-  grid-template-columns: 4.6rem 1fr;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
   gap: 0.2rem 0.55rem;
   font-size: 0.78rem;
   line-height: 1.35;
@@ -81,11 +82,16 @@ h2 { margin: 0.2rem 0 0.8rem; font-size: 1.2rem; }
   color: var(--marca);
 }
 
-.resumo dd { margin: 0; }
+.resumo dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
 
 .resumo code {
   font-size: 0.74rem;
   color: var(--tinta);
+  overflow-wrap: break-word;
 }
 
 form, .linha { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; }

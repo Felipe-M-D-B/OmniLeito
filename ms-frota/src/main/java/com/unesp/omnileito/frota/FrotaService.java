@@ -82,6 +82,15 @@ public class FrotaService {
 		cache.apagar(CacheOcupacao.FROTA);
 	}
 
+	@Transactional
+	public void reiniciarCarga() {
+		for (Ambulancia ambulancia : ambulancias.findAll()) {
+			ambulancia.setStatus(StatusAmbulancia.DISPONIVEL);
+			ambulancia.setOcorrenciaId(null);
+		}
+		cache.apagar(CacheOcupacao.FROTA);
+	}
+
 	private void publicar(AmbulanciaAlocada evento) {
 		publicador.depoisDoCommit(() -> publicador.saga(Filas.AMBULANCIA_ALOCADA, evento));
 	}

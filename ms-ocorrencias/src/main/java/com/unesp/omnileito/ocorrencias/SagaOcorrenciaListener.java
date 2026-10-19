@@ -17,22 +17,22 @@ public class SagaOcorrenciaListener {
 		this.saga = saga;
 	}
 
-	@RabbitListener(queues = Filas.AMBULANCIA_ALOCADA)
+	@RabbitListener(id = Filas.AMBULANCIA_ALOCADA, queues = Filas.AMBULANCIA_ALOCADA)
 	public void ambulancia(AmbulanciaAlocada evento) {
 		saga.receberAmbulancia(evento);
 	}
 
-	@RabbitListener(queues = Filas.LEITO_RESERVADO)
+	@RabbitListener(id = Filas.LEITO_RESERVADO, queues = Filas.LEITO_RESERVADO)
 	public void leito(LeitoReservado evento) {
 		saga.receberLeito(evento);
 	}
 
-	@RabbitListener(queues = Filas.LEITO_EXPIRADO)
+	@RabbitListener(id = Filas.LEITO_EXPIRADO, queues = Filas.LEITO_EXPIRADO)
 	public void expiracao(LeitoExpirado evento) {
 		saga.receberExpiracao(evento);
 	}
 
-	@RabbitListener(queues = Filas.RETENTAR_BUSCA_LEITO)
+	@RabbitListener(id = Filas.RETENTAR_BUSCA_LEITO, queues = Filas.RETENTAR_BUSCA_LEITO)
 	public void retentar(RetentarBuscaLeito evento) {
 		saga.retentar(evento);
 	}

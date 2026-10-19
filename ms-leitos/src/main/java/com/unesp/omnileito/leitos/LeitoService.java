@@ -39,13 +39,14 @@ public class LeitoService {
 	private final CacheLeitos cache;
 	private final SorteioUnidade sorteio;
 	private final Publicador publicador;
+	private final VarreduraLeitos varredura;
 	private final long expiracaoMinutos;
 	private final JsonMapper json = JsonMapper.builder().build();
 	private final ConcurrentHashMap<String, Long> ambulanciaPorOcorrencia = new ConcurrentHashMap<>();
 	private final Set<String> proximaBuscaSemVaga = ConcurrentHashMap.newKeySet();
 
 	public LeitoService(LeitoRepository leitos, ReservaRecusadaRepository recusas, UnidadeSaudeRepository unidades,
-			CacheLeitos cache, SorteioUnidade sorteio, Publicador publicador,
+			CacheLeitos cache, SorteioUnidade sorteio, Publicador publicador, VarreduraLeitos varredura,
 			@Value("${omnileito.reserva.expiracao-minutos:2}") long expiracaoMinutos) {
 		this.leitos = leitos;
 		this.recusas = recusas;
@@ -53,6 +54,7 @@ public class LeitoService {
 		this.cache = cache;
 		this.sorteio = sorteio;
 		this.publicador = publicador;
+		this.varredura = varredura;
 		this.expiracaoMinutos = expiracaoMinutos;
 	}
 
@@ -101,6 +103,26 @@ public class LeitoService {
 	public void armarProximaBuscaSemVaga(String tipoLeito) {
 		exigirTipo(tipoLeito);
 		proximaBuscaSemVaga.add(tipoLeito);
+	}
+
+	@Transactional
+	public void reiniciarCarga() {
+		recusas.deleteAllInBatch();
+		for (Leito leito : leitos.findAll()) {
+			if (!CODIGOS_DA_CARGA.contains(leito.getCodigo())) {
+				leitos.delete(leito);
+				continue;
+			}
+			leito.setStatus(leito.getCodigo().endsWith("-01") ? StatusLeito.LIVRE : StatusLeito.OCUPADO);
+			leito.setOcorrenciaId(null);
+			leito.setReservadoEm(null);
+			leito.setConfirmado(false);
+			leito.setConfirmadoEm(null);
+		}
+		proximaBuscaSemVaga.clear();
+		ambulanciaPorOcorrencia.clear();
+		sorteio.definir("");
+		TIPOS.forEach(cache::apagar);
 	}
 
 	private void exigirTipo(String tipoLeito) {
@@ -174,6 +196,9 @@ public class LeitoService {
 	@Scheduled(fixedDelayString = "${omnileito.reserva.varredura-ms:15000}")
 	@Transactional
 	public void expirarReservas() {
+		if (varredura.pausada()) {
+			return;
+		}
 		LocalDateTime limite = LocalDateTime.now().minusMinutes(expiracaoMinutos);
 		List<Leito> vencidas = leitos.findByStatusAndConfirmadoFalseAndReservadoEmBefore(StatusLeito.RESERVADO, limite);
 		for (Leito leito : vencidas) {

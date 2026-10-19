@@ -15,12 +15,12 @@ public class FrotaListener {
 		this.frota = frota;
 	}
 
-	@RabbitListener(queues = Filas.ALOCAR_AMBULANCIA)
+	@RabbitListener(id = Filas.ALOCAR_AMBULANCIA, queues = Filas.ALOCAR_AMBULANCIA)
 	public void alocar(AlocarAmbulancia pedido) {
 		frota.alocar(pedido);
 	}
 
-	@RabbitListener(queues = Filas.ATUALIZAR_AMBULANCIA)
+	@RabbitListener(id = Filas.ATUALIZAR_AMBULANCIA, queues = Filas.ATUALIZAR_AMBULANCIA)
 	public void atualizar(AtualizarAmbulancia pedido) {
 		frota.atualizar(pedido);
 	}

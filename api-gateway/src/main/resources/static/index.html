@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OmniLeito — regulação</title>
-  <link rel="stylesheet" href="/regulacao.css?v=2">
+  <link rel="stylesheet" href="/regulacao.css?v=3">
 </head>
 <body>
   <header class="topo">
     <div>
       <p class="marca">OmniLeito</p>
-      <h1>Regulação</h1>
+      <h1>Painel de Controle</h1>
     </div>
     <p id="sessao" class="sessao">Sem token. Entre para chamar a regulação.</p>
   </header>
@@ -233,7 +233,51 @@
       </div>
       <pre id="saida-circuito" class="saida"></pre>
     </section>
+
+    <section class="cartao" id="cartao-reinicio">
+      <p class="dono">Carga</p>
+      <h2>Estado inicial</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias/<br>demonstracao/reinicio</code><br><code>POST /api/ambulancias/<br>demonstracao/reinicio</code><br><code>POST /api/leitos/<br>demonstracao/reinicio</code><br><code>POST /api/notificacoes/<br>demonstracao/reinicio</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Ocorrencias apaga as ocorrências e esvazia as filas. MS-Frota devolve as ambulâncias a <code>DISPONIVEL</code>. MS-Leitos restaura os seis leitos da carga, apaga o extra e volta o modo a aleatório. MS-Notificacoes esvazia o Mongo.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway encaminha. O login do regulador permanece. Os processos Java continuam no ar.</dd>
+      </dl>
+      <p class="nota">Use com a saga parada. O botão não encerra serviço nem recria o banco do zero.</p>
+      <button type="button" id="btn-reinicio">Reiniciar no estado inicial</button>
+      <pre id="saida-reinicio" class="saida"></pre>
+    </section>
+
+    <section class="cartao" id="cartao-filas">
+      <p class="dono">RabbitMQ</p>
+      <h2>Filas</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias/demonstracao/rajada</code><br><code>POST /api/ocorrencias/demonstracao/filas/acumulo</code><br><code>POST /api/ocorrencias/demonstracao/filas/esvaziar</code></dd>
+        <dt>Gera</dt>
+        <dd>A rajada abre e despacha pela saga. O acúmulo publica nas oito filas com os listeners pausados.</dd>
+        <dt>Consome</dt>
+        <dd>Na rajada, MS-Frota, MS-Leitos e MS-Notificacoes. No acúmulo, ninguém consome até esvaziar e religar.</dd>
+      </dl>
+      <p class="nota">Abra <code>http://localhost:15672</code> e atualize Queues. A rajada gasta a carga. O acúmulo deixa Ready parado para a foto e não processa essas mensagens.</p>
+      <div class="linha">
+        <label>Rajada
+          <input id="qtd-rajada" type="number" min="1" max="100" value="20">
+        </label>
+        <button type="button" id="btn-rajada">Rajada</button>
+      </div>
+      <div class="linha">
+        <label>Acúmulo
+          <input id="qtd-acumulo" type="number" min="1" max="200" value="40">
+        </label>
+        <button type="button" id="btn-acumular">Pausar e acumular</button>
+        <button type="button" id="btn-esvaziar-filas">Esvaziar e religar</button>
+      </div>
+      <pre id="saida-filas" class="saida"></pre>
+    </section>
   </main>
-  <script src="/regulacao.js"></script>
+  <script src="/regulacao.js?v=4"></script>
 </body>
 </html>

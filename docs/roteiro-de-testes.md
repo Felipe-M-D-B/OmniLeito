@@ -119,6 +119,8 @@ docker exec omnileito-mongo mongosh --quiet --eval 'db.getSiblingDB("omnileito_n
 docker exec omnileito-redis redis-cli FLUSHDB
 ```
 
+O cartão **Estado inicial** do painel devolve essa carga com os processos no ar: apaga ocorrências, esvazia as filas, devolve as duas ambulâncias a `DISPONIVEL`, restaura os seis leitos, apaga leito extra, volta o hospital a aleatório e esvazia o Mongo. O usuário `regulador` continua. O `DROP DATABASE` acima serve quando a carga do Flyway em si precisa nascer de novo.
+
 Suba os seis processos de novo. O Flyway recria as tabelas e a carga. Confira:
 
 ```bash
@@ -574,3 +576,11 @@ O modo `ACEITE`, `RECUSA`, `SILENCIO` ou aleatório é trocado na tela, com o MS
 `L-UTI-03` só existe enquanto o cartão de outro leito estiver em uso. Apague esse código quando ele voltar a `LIVRE`. A trava de falta de leito vale uma busca, nasce desligada a cada subida e só altera a tentativa seguinte a 1.
 
 No circuito, pare só a porta 8095 com Ctrl+C. A consulta de UTI na tela responde `503`. A abertura ao lado responde `201`.
+
+## 15. Carga das filas
+
+Com os seis processos no ar, abra o RabbitMQ em `http://localhost:15672` (`guest` / `guest`), aba Queues, e o cartão **Filas** do painel.
+
+**Pausar e acumular**, quantidade 40. As quatro pausas e o acúmulo respondem `204`. Atualize o RabbitMQ: as oito filas ficam com Ready `40`. Espere e atualize de novo: Ready continua `40`. **Esvaziar e religar** devolve as oito filas a zero. Um despacho manual depois disso ainda percorre a saga.
+
+**Rajada**, quantidade 20, com a carga limpa. Enquanto a resposta não fecha, atualize o RabbitMQ. As taxas de `saga.alocar-ambulancia` e `saga.ambulancia-alocada` passam de `0.00/s`. Ao terminar, Ready volta a zero e a frota fica gasta. O cartão **Estado inicial** restaura a carga. O detalhe está em `docs/plano-carga-das-filas.md` e no manual da tela.

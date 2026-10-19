@@ -37,6 +37,11 @@ public class NotificacaoService {
 		}
 	}
 
+	public void reiniciarCarga() {
+		notificacoes.deleteAll();
+		auditorias.deleteAll();
+	}
+
 	public List<NotificacaoResponse> listar(String ocorrenciaId) {
 		if (ocorrenciaId == null || ocorrenciaId.isBlank()) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "CAMPO_INVALIDO", "Campo ausente ou valor fora da lista fechada.");
