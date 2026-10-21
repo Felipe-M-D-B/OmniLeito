@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OmniLeito — regulação</title>
+  <link rel="stylesheet" href="/regulacao.css?v=3">
+</head>
+<body>
+  <header class="topo">
+    <div>
+      <p class="marca">OmniLeito</p>
+      <h1>Painel de Controle</h1>
+    </div>
+    <p id="sessao" class="sessao">Sem token. Entre para chamar a regulação.</p>
+  </header>
+
+  <main>
+    <section class="cartao" id="cartao-entrar">
+      <p class="dono">RF01</p>
+      <h2>Entrar</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/auth/login</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Identidade devolve o JWT. Não há fila.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway encaminha a chamada.</dd>
+      </dl>
+      <form id="form-entrar">
+        <label>Usuário <input name="usuario" value="regulador" autocomplete="username" required></label>
+        <label>Senha <input name="senha" type="password" value="regulador" autocomplete="current-password" required></label>
+        <button type="submit">Entrar</button>
+      </form>
+      <pre id="saida-entrar" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF02 a RF04</p>
+      <h2>Abrir ocorrência</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Ocorrencias grava a ocorrência <code>ABERTA</code>. A abertura não publica mensagem.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway encaminha a chamada.</dd>
+      </dl>
+      <form id="form-abrir">
+        <label>Paciente <input name="nome" value="Maria Souza" required></label>
+        <label>Local <input name="local" value="Rua das Flores, 100" required></label>
+        <label>Prioridade
+          <select name="prioridade">
+            <option>VERMELHA</option>
+            <option selected>AMARELA</option>
+            <option>VERDE</option>
+          </select>
+        </label>
+        <label>Tipo de leito
+          <select name="tipoLeito">
+            <option selected>UTI</option>
+            <option>EMERGENCIA</option>
+            <option>ENFERMARIA</option>
+          </select>
+        </label>
+        <button type="submit">Abrir</button>
+      </form>
+      <pre id="saida-abrir" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF17 e RF18</p>
+      <h2>Ocupação</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>GET /api/ambulancias/disponiveis</code> e <code>GET /api/leitos/disponiveis</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Frota e MS-Leitos. Cada um lê o próprio Redis e, sem chave, o MySQL.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway. A consulta de leitos passa pelo circuito.</dd>
+      </dl>
+      <div class="linha">
+        <button type="button" id="btn-ambulancias">Ambulâncias disponíveis</button>
+        <label>Tipo
+          <select id="tipo-ocupacao">
+            <option selected>UTI</option>
+            <option>EMERGENCIA</option>
+            <option>ENFERMARIA</option>
+          </select>
+        </label>
+        <button type="button" id="btn-leitos">Leitos livres</button>
+      </div>
+      <pre id="saida-ocupacao" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF13</p>
+      <h2>Modo do hospital</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>GET</code> e <code>PUT /api/leitos/demonstracao/resultado</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Leitos guarda o modo e usa na próxima reserva.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway encaminha. Sem fila.</dd>
+      </dl>
+      <p class="nota">Vale para a próxima reserva, com o MS-Leitos no ar. Vazio na subida continua aleatório.</p>
+      <div class="linha" id="modos">
+        <button type="button" data-resultado="ACEITE">Aceite</button>
+        <button type="button" data-resultado="RECUSA">Recusa</button>
+        <button type="button" data-resultado="SILENCIO">Silêncio</button>
+        <button type="button" data-resultado="">Aleatório</button>
+      </div>
+      <p id="modo-atual" class="modo">Modo ainda não consultado.</p>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF06 a RF12</p>
+      <h2>Despachar</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias/{id}/despachos</code> e <code>GET /api/ocorrencias/{id}</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Ocorrencias publica <code>saga.alocar-ambulancia</code>. MS-Frota responde em <code>saga.ambulancia-alocada</code>. MS-Ocorrencias publica <code>saga.reservar-leito</code>. MS-Leitos responde em <code>saga.leito-reservado</code>.</dd>
+        <dt>Consome</dt>
+        <dd>MS-Frota, MS-Leitos e MS-Ocorrencias, nessa ordem. No sucesso, MS-Ocorrencias publica <code>saga.atualizar-ambulancia</code> e <code>notificacao.registrar</code>, consumidas por MS-Frota e MS-Notificacoes.</dd>
+      </dl>
+      <label>Ocorrência <input id="ocorrencia-id" spellcheck="false"></label>
+      <div class="linha">
+        <button type="button" id="btn-despachar">Despachar</button>
+        <button type="button" id="btn-consultar">Consultar</button>
+      </div>
+      <p class="nota">O 202 só diz que a saga começou. A tela consulta de novo a cada 2 segundos, por até 15 segundos.</p>
+      <pre id="saida-despacho" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF07</p>
+      <h2>Segundo despacho</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias/{id}/despachos</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Ocorrencias responde <code>200</code> com a mesma ambulância e o mesmo leito.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway. Esta repetição não publica fila nova.</dd>
+      </dl>
+      <button type="button" id="btn-segundo">Repetir despacho desta ocorrência</button>
+      <pre id="saida-segundo" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF24</p>
+      <h2>Notificações</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>GET /api/notificacoes?ocorrenciaId=</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Ocorrencias ou MS-Leitos publicam <code>notificacao.registrar</code>.</dd>
+        <dt>Consome</dt>
+        <dd>MS-Notificacoes grava no Mongo e devolve a lista. API Gateway encaminha a consulta.</dd>
+      </dl>
+      <button type="button" id="btn-notificacoes">Consultar notificações</button>
+      <pre id="saida-notificacoes" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">Critério 6</p>
+      <h2>Prazo do aceite</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>GET /api/notificacoes?ocorrenciaId=</code> depois dos 2 minutos.</dd>
+        <dt>Gera</dt>
+        <dd>O job do MS-Leitos lê o MySQL. Reserva confirmada não publica <code>saga.leito-expirado</code>.</dd>
+        <dt>Consome</dt>
+        <dd>MS-Notificacoes só recebe <code>EXPIRACAO</code> quando o prazo vence uma reserva sem confirmação.</dd>
+      </dl>
+      <p class="nota">Depois de um aceite, espere 2 minutos. A reserva confirmada não gera EXPIRACAO.</p>
+      <button type="button" id="btn-prazo">Iniciar marcador de 2 minutos</button>
+      <p id="relogio" class="modo">Marcador parado.</p>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF22</p>
+      <h2>Outro leito</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/leitos/demonstracao/leito-extra</code> e <code>DELETE /api/leitos/demonstracao/leito-extra/L-UTI-03</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Leitos cria ou remove o leito e apaga o cache da especialidade.</dd>
+        <dt>Consome</dt>
+        <dd>Na recusa, MS-Ocorrencias publica <code>saga.reservar-leito</code> e MS-Leitos prefere o outro leito livre.</dd>
+      </dl>
+      <p class="nota">Cria L-UTI-03 livre. Na recusa de L-UTI-01, a busca seguinte prefere esse código. Apague quando voltar a livre.</p>
+      <div class="linha">
+        <button type="button" id="btn-criar-extra">Criar L-UTI-03</button>
+        <button type="button" id="btn-apagar-extra">Apagar L-UTI-03</button>
+      </div>
+      <pre id="saida-extra" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF23</p>
+      <h2>Falta de leito</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/leitos/demonstracao/proxima-busca-sem-vaga</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Leitos, na tentativa seguinte, publica <code>saga.leito-reservado</code> com <code>SEM_LEITO_COMPATIVEL</code>.</dd>
+        <dt>Consome</dt>
+        <dd>MS-Ocorrencias publica <code>notificacao.registrar</code> do tipo <code>FALTA_LEITO</code>. MS-Notificacoes grava.</dd>
+      </dl>
+      <p class="nota">Arme a trava, deixe o hospital em recusa e despache uma UTI. A tentativa 1 reserva. A seguinte grava FALTA_LEITO. A trava vale uma vez e nasce desligada.</p>
+      <button type="button" id="btn-trava">Armar próxima busca de UTI sem vaga</button>
+      <pre id="saida-trava" class="saida"></pre>
+    </section>
+
+    <section class="cartao">
+      <p class="dono">RF05</p>
+      <h2>Circuito</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>GET /api/leitos/disponiveis</code> e <code>POST /api/ocorrencias</code></dd>
+        <dt>Gera</dt>
+        <dd>Com o MS-Leitos parado, o API Gateway responde <code>503</code>. A abertura continua no MS-Ocorrencias.</dd>
+        <dt>Consome</dt>
+        <dd>O circuito vale só para <code>/api/leitos</code>. Login, abertura e despacho não entram nele.</dd>
+      </dl>
+      <p class="nota">Pare só o processo da porta 8095 com Ctrl+C. A consulta de UTI deve responder 503. A abertura, no mesmo momento, responde 201. Suba o MS-Leitos de novo.</p>
+      <div class="linha">
+        <button type="button" id="btn-circuito">Consultar UTI</button>
+        <button type="button" id="btn-abertura-circuito">Abrir ocorrência agora</button>
+      </div>
+      <pre id="saida-circuito" class="saida"></pre>
+    </section>
+
+    <section class="cartao" id="cartao-reinicio">
+      <p class="dono">Carga</p>
+      <h2>Estado inicial</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias/<br>demonstracao/reinicio</code><br><code>POST /api/ambulancias/<br>demonstracao/reinicio</code><br><code>POST /api/leitos/<br>demonstracao/reinicio</code><br><code>POST /api/notificacoes/<br>demonstracao/reinicio</code></dd>
+        <dt>Gera</dt>
+        <dd>MS-Ocorrencias apaga as ocorrências e esvazia as filas. MS-Frota devolve as ambulâncias a <code>DISPONIVEL</code>. MS-Leitos restaura os seis leitos da carga, apaga o extra e volta o modo a aleatório. MS-Notificacoes esvazia o Mongo.</dd>
+        <dt>Consome</dt>
+        <dd>API Gateway encaminha. O login do regulador permanece. Os processos Java continuam no ar.</dd>
+      </dl>
+      <p class="nota">Use com a saga parada. O botão não encerra serviço nem recria o banco do zero.</p>
+      <button type="button" id="btn-reinicio">Reiniciar no estado inicial</button>
+      <pre id="saida-reinicio" class="saida"></pre>
+    </section>
+
+    <section class="cartao" id="cartao-filas">
+      <p class="dono">RabbitMQ</p>
+      <h2>Filas</h2>
+      <dl class="resumo">
+        <dt>API</dt>
+        <dd><code>POST /api/ocorrencias/demonstracao/rajada</code><br><code>POST /api/ocorrencias/demonstracao/filas/acumulo</code><br><code>POST /api/ocorrencias/demonstracao/filas/esvaziar</code></dd>
+        <dt>Gera</dt>
+        <dd>A rajada abre e despacha pela saga. O acúmulo publica nas oito filas com os listeners pausados.</dd>
+        <dt>Consome</dt>
+        <dd>Na rajada, MS-Frota, MS-Leitos e MS-Notificacoes. No acúmulo, ninguém consome até esvaziar e religar.</dd>
+      </dl>
+      <p class="nota">Abra <code>http://localhost:15672</code> e atualize Queues. A rajada gasta a carga. O acúmulo deixa Ready parado para a foto e não processa essas mensagens.</p>
+      <div class="linha">
+        <label>Rajada
+          <input id="qtd-rajada" type="number" min="1" max="100" value="20">
+        </label>
+        <button type="button" id="btn-rajada">Rajada</button>
+      </div>
+      <div class="linha">
+        <label>Acúmulo
+          <input id="qtd-acumulo" type="number" min="1" max="200" value="40">
+        </label>
+        <button type="button" id="btn-acumular">Pausar e acumular</button>
+        <button type="button" id="btn-esvaziar-filas">Esvaziar e religar</button>
+      </div>
+      <pre id="saida-filas" class="saida"></pre>
+    </section>
+  </main>
+  <script src="/regulacao.js?v=4"></script>
+</body>
+</html>

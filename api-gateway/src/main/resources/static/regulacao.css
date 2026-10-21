@@ -1,0 +1,130 @@
+:root {
+  color-scheme: light;
+  --fundo: #f3f0e8;
+  --cartao: #fffdf8;
+  --tinta: #1c2430;
+  --apoio: #5c6570;
+  --linha: #d9d1c3;
+  --marca: #0e5c5c;
+  --botao: #0e5c5c;
+  --botao-tinta: #f7fffe;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  background: var(--fundo);
+  color: var(--tinta);
+}
+
+.topo {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  align-items: end;
+  padding: 1.5rem 1.75rem 0.5rem;
+}
+
+.marca {
+  margin: 0;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--marca);
+  font-size: 0.8rem;
+}
+
+h1 { margin: 0.15rem 0 0; font-size: 1.8rem; }
+
+.sessao { margin: 0; color: var(--apoio); max-width: 28rem; }
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  padding: 1rem 1.75rem 2rem;
+}
+
+.cartao {
+  min-width: 0;
+  background: var(--cartao);
+  border: 1px solid var(--linha);
+  border-radius: 8px;
+  padding: 1rem 1.1rem 1.15rem;
+}
+
+.dono {
+  margin: 0;
+  color: var(--marca);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+h2 { margin: 0.2rem 0 0.8rem; font-size: 1.2rem; }
+
+.nota { margin: 0 0 0.8rem; color: var(--apoio); font-size: 0.92rem; }
+
+.resumo {
+  margin: 0 0 0.85rem;
+  display: grid;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+  gap: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--apoio);
+}
+
+.resumo dt {
+  margin: 0;
+  font-weight: 700;
+  color: var(--marca);
+}
+
+.resumo dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.resumo code {
+  font-size: 0.74rem;
+  color: var(--tinta);
+  overflow-wrap: break-word;
+}
+
+form, .linha { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; }
+
+label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--apoio); }
+
+input, select, button {
+  font: inherit;
+  color: var(--tinta);
+  border: 1px solid var(--linha);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  background: #fff;
+}
+
+button {
+  background: var(--botao);
+  color: var(--botao-tinta);
+  border-color: var(--botao);
+  cursor: pointer;
+}
+
+button:hover { filter: brightness(1.08); }
+
+.modo { margin: 0.8rem 0 0; font-weight: 600; }
+
+.saida {
+  margin: 0.8rem 0 0;
+  min-height: 2.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f7f4ee;
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.82rem;
+}
